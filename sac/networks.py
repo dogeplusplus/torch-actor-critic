@@ -17,13 +17,14 @@ def softplus(x, beta=1, threshold=20):
 
 
 class Actor(nn.Module):
-    def __init__(self, obs_dim, act_dim, hidden_sizes, log_min_std, log_max_std):
+    def __init__(self, obs_dim, act_dim, hidden_sizes, log_min_std, log_max_std, act_limit):
         self.layers = mlp([obs_dim] + hidden_sizes)
         self.act_dim = act_dim
         self.mu_layer = nn.Linear(hidden_sizes[-1], self.act_dim)
         self.log_std_layer = nn.Linear(hidden_sizes[-1], self.act_dim)
         self.log_min_std = log_min_std
         self.log_max_std = log_max_std
+        self.act_limit = act_limit
 
 
     def forward(self, x, deterministic=False, with_logprob=True):
