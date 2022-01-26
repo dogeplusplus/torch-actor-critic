@@ -1,2 +1,7 @@
 pre-commit
 pytest
+torch
+gym[all]
+mujoco-py
+numpy
+tqdm
