@@ -6,6 +6,7 @@ import numpy as np
 import torch.optim as optim
 
 from copy import deepcopy
+from torch import FloatTensor
 from dataclasses import dataclass
 
 from sac.buffer import ReplayBuffer
@@ -36,11 +37,11 @@ def eval_pi_loss(
     alpha: float
 ) -> torch.FloatTensor:
     pi, logp_pi = actor(next_state)
-    sa2 = torch.concatenate([state, pi], axis=-1)
+    sa2 = torch.cat([state, pi], axis=-1)
     with torch.no_grad():
         q1, q2 = critic(sa2)
 
-    q_pi = torch.min(torch.concatenate([q1, q2], axis=-1))
+    q_pi = torch.min(torch.cat([q1, q2], axis=-1))
     loss_pi = torch.mean(alpha * logp_pi - q_pi)
 
     return loss_pi
@@ -61,7 +62,7 @@ def eval_q_loss(
 
     with torch.no_grad():
         a2, logp_ac = actor(next_states)
-        sa2 = torch.concatenate([next_states, a2], axis=-1)
+        sa2 = torch.cat([next_states, a2], axis=-1)
         q1_target, q2_target = target_critic(sa2)
         q_target = torch.where(q1_target < q2_target, q1_target, q2_target)
 
@@ -69,7 +70,7 @@ def eval_q_loss(
             q_target - alpha * logp_ac
     )
 
-    sa = torch.concatenate([states, actions], axis=-1)
+    sa = torch.cat([states, actions], axis=-1)
     q1, q2 = critic(sa)
 
     loss_q1 = torch.mean((q1 - backup) ** 2)
@@ -102,8 +103,6 @@ class SAC(object):
         params = self.params
 
         step = 0
-        alpha = 0.1
-        gamma = 0.1
 
         act_dim = self.env.action_space.shape[0]
         obs_dim = self.env.observation_space.shape[0]
@@ -140,7 +139,10 @@ class SAC(object):
                     action = self.env.action_space.sample()
                 else:
                     with torch.no_grad():
-                        action = actor(state)
+                        action, _ = actor(
+                            FloatTensor(state).to(self.device)
+                        )
+                        action = action.cpu().detach().numpy()
 
                 next_state, reward, done, _ = self.env.step(action)
                 self.env.render()
@@ -173,8 +175,8 @@ class SAC(object):
                                 samples.rewards,
                                 samples.next_states,
                                 samples.done,
-                                alpha,
-                                gamma,
+                                params.alpha,
+                                params.gamma,
                         )
                         loss_q.backward()
                         q_opt.step()
@@ -186,7 +188,7 @@ class SAC(object):
                             double_critic,
                             samples.states,
                             samples.next_states,
-                            alpha
+                            params.alpha
                         )
 
                         loss_pi.backward()
