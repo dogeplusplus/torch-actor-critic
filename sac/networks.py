@@ -3,21 +3,33 @@ import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 
+from torch import FloatTensor
+from typing import List, Tuple
 
-def mlp(neurons):
-    layers = [
+
+def mlp(neurons: List[int]) -> nn.ModuleList:
+    layers = nn.ModuleList([
         nn.Linear(x, y) for x, y in zip(neurons[:-1], neurons[1:])
-    ]
+    ])
     return layers
 
 
-def softplus(x, beta=1, threshold=20):
+def softplus(x, beta: float = 1, threshold: float = 20) -> np.ndarray:
     softp = 1.0 / beta * np.log(1 + np.exp(beta * x))
     return np.where(beta * x > threshold, x, softp)
 
 
 class Actor(nn.Module):
-    def __init__(self, obs_dim, act_dim, hidden_sizes, log_min_std, log_max_std, act_limit):
+    def __init__(
+        self,
+        obs_dim: int,
+        act_dim: int,
+        hidden_sizes: List[int],
+        log_min_std: float = -20,
+        log_max_std: float = 2,
+        act_limit: float = 10
+    ):
+        super(Actor, self).__init__()
         self.layers = mlp([obs_dim] + hidden_sizes)
         self.act_dim = act_dim
         self.mu_layer = nn.Linear(hidden_sizes[-1], self.act_dim)
@@ -27,7 +39,7 @@ class Actor(nn.Module):
         self.act_limit = act_limit
 
 
-    def forward(self, x, deterministic=False, with_logprob=True):
+    def forward(self, x: FloatTensor, deterministic: bool = False, with_logprob: bool = True):
         for layer in self.layers:
             x = layer(x)
             x = F.relu(x)
@@ -52,10 +64,11 @@ class Actor(nn.Module):
 
 
 class Critic(nn.Module):
-    def __init__(self, obs_dim, act_dim, hidden_sizes):
+    def __init__(self, obs_dim: int, act_dim: int, hidden_sizes: List[int]):
+        super(Critic, self).__init__()
         self.layers = mlp([obs_dim + act_dim] + hidden_sizes + [1])
 
-    def forward(self, x):
+    def forward(self, x: FloatTensor) -> FloatTensor:
         for layer in self.layers[:-1]:
             x = layer(x)
             x = F.relu(x)
@@ -65,10 +78,11 @@ class Critic(nn.Module):
 
 
 class DoubleCritic(nn.Module):
-    def __init__(self, obs_dim, act_dim, hidden_sizes):
+    def __init__(self, obs_dim: int, act_dim: int, hidden_sizes: List[int]):
+        super(DoubleCritic, self).__init__()
         self.q1 = Critic(obs_dim, act_dim, hidden_sizes)
         self.q2 = Critic(obs_dim, act_dim, hidden_sizes)
 
-    def forward(self, x):
+    def forward(self, x: FloatTensor) -> Tuple[FloatTensor, FloatTensor]:
         return self.q1(x), self.q2(x)
 
