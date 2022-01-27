@@ -2,8 +2,7 @@ import numpy as np
 
 from random import sample
 from dataclasses import dataclass
-from torch import FloatTensor, BoolTensor
-from torch.cuda import BoolTensor as BoolCudaTensor
+from torch import FloatTensor
 from torch.cuda import FloatTensor as FloatCudaTensor
 
 from typing import Union
@@ -15,7 +14,7 @@ class Batch:
     actions: Union[FloatTensor, FloatCudaTensor]
     rewards: Union[FloatTensor, FloatCudaTensor]
     next_states: Union[FloatTensor, FloatCudaTensor]
-    done: Union[BoolTensor, BoolCudaTensor]
+    done: Union[FloatTensor, FloatCudaTensor]
 
 
 class ReplayBuffer:
@@ -57,6 +56,6 @@ class ReplayBuffer:
             FloatTensor(self.actions[idx]).to(self.device),
             FloatTensor(self.rewards[idx]).to(self.device),
             FloatTensor(self.next_state[idx]).to(self.device),
-            BoolTensor(self.done[idx]).to(self.device),
+            FloatTensor(self.done[idx]).to(self.device),
         )
 
