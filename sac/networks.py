@@ -4,7 +4,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from torch import FloatTensor
-from typing import List, Tuple
+from typing import List, Tuple, Union
+from torch.distributions.normal import Normal
+from torch.cuda import FloatTensor as FloatCudaTensor
 
 
 def mlp(neurons: List[int]) -> nn.ModuleList:
@@ -14,9 +16,9 @@ def mlp(neurons: List[int]) -> nn.ModuleList:
     return layers
 
 
-def softplus(x, beta: float = 1, threshold: float = 20) -> np.ndarray:
-    softp = 1.0 / beta * np.log(1 + np.exp(beta * x))
-    return np.where(beta * x > threshold, x, softp)
+def softplus(x, beta: float = 1, threshold: float = 20) -> Union[FloatTensor, FloatCudaTensor]:
+    softp = 1.0 / beta * torch.log(1 + torch.exp(beta * x))
+    return torch.where(beta * x > threshold, x, softp)
 
 
 class Actor(nn.Module):
@@ -51,7 +53,7 @@ class Actor(nn.Module):
 
         prob = mu
         if not deterministic:
-            prob += std * torch.distributions.normal()
+            prob = Normal(mu, std).rsample()
 
         logprob = None
         if with_logprob:
