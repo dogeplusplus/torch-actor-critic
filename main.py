@@ -5,9 +5,11 @@ import torch.nn as nn
 import numpy as np
 import torch.optim as optim
 
+from typing import Union
 from copy import deepcopy
 from torch import FloatTensor
 from dataclasses import dataclass
+from torch.cuda import FloatTensor as FloatCudaTensor
 
 from sac.buffer import ReplayBuffer
 from sac.networks import Actor, DoubleCritic
@@ -32,16 +34,16 @@ class TrainingParameters:
 def eval_pi_loss(
     actor: Actor,
     critic: DoubleCritic,
-    state: np.ndarray,
-    next_state: np.ndarray,
+    state: Union[FloatTensor, FloatCudaTensor],
+    next_state: Union[FloatTensor, FloatCudaTensor],
     alpha: float
 ) -> torch.FloatTensor:
     pi, logp_pi = actor(next_state)
-    sa2 = torch.cat([state, pi], axis=-1)
+    sa2 = torch.cat([state, pi], dim=-1)
     with torch.no_grad():
         q1, q2 = critic(sa2)
 
-    q_pi = torch.min(torch.cat([q1, q2], axis=-1))
+    q_pi = torch.min(torch.cat([q1, q2], dim=-1))
     loss_pi = torch.mean(alpha * logp_pi - q_pi)
 
     return loss_pi
@@ -51,18 +53,18 @@ def eval_q_loss(
     actor: Actor,
     critic: DoubleCritic,
     target_critic: DoubleCritic,
-    states: np.ndarray,
-    actions: np.ndarray,
-    rewards: np.ndarray,
-    next_states: np.ndarray,
-    done: np.ndarray,
+    states: Union[FloatTensor, FloatCudaTensor],
+    actions: Union[FloatTensor, FloatCudaTensor],
+    rewards: Union[FloatTensor, FloatCudaTensor],
+    next_states: Union[FloatTensor, FloatCudaTensor],
+    done: Union[FloatTensor, FloatCudaTensor],
     alpha: float,
     gamma: float,
 ) -> torch.FloatTensor:
 
     with torch.no_grad():
         a2, logp_ac = actor(next_states)
-        sa2 = torch.cat([next_states, a2], axis=-1)
+        sa2 = torch.cat([next_states, a2], dim=-1)
         q1_target, q2_target = target_critic(sa2)
         q_target = torch.where(q1_target < q2_target, q1_target, q2_target)
 
@@ -70,7 +72,7 @@ def eval_q_loss(
             q_target - alpha * logp_ac
     )
 
-    sa = torch.cat([states, actions], axis=-1)
+    sa = torch.cat([states, actions], dim=-1)
     q1, q2 = critic(sa)
 
     loss_q1 = torch.mean((q1 - backup) ** 2)
@@ -81,8 +83,11 @@ def eval_q_loss(
 
 
 def update_targets(source: nn.Module, target: nn.Module, polyak: float):
-    import pdb; pdb.set_trace()
-    pass
+    with torch.no_grad():
+        for src, targ in zip(source.parameters(), target.parameters()):
+            targ.data.mul_(polyak)
+            targ.data.add_((1 - polyak) * src.data)
+
 
 
 class SAC(object):
@@ -193,10 +198,7 @@ class SAC(object):
 
                         loss_pi.backward()
                         pi_opt.step()
-
-
-                        # q_state_targ = update_targets(double_critic, target_critic, params.polyak)
-
+                        update_targets(double_critic, target_critic, params.polyak)
                         cumulative_metrics["pi_loss"] += loss_pi.cpu().detach().numpy()
                         cumulative_metrics["q_loss"] += loss_q.cpu().detach().numpy()
 
