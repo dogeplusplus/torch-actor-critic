@@ -25,7 +25,12 @@ def mpi_fork(n, bind_to_core=False):
         if bind_to_core:
             args += ["-bind-to", "core"]
         args += [sys.executable] + sys.argv
-        subprocess.check_call(args, env=env)
+        p = subprocess.Popen(args, env=env)
+        try:
+            p.wait()
+        except KeyboardInterrupt:
+            p.kill()
+
         sys.exit()
 
 
