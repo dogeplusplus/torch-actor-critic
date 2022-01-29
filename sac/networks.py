@@ -50,19 +50,19 @@ class Actor(nn.Module):
         log_std = torch.clip(log_std, self.log_min_std, self.log_max_std)
         std = torch.exp(log_std)
 
+        pi_distribution = Normal(mu, std)
         prob = mu
         if not deterministic:
-            prob = Normal(mu, std).rsample()
+                prob = pi_distribution.rsample()
 
         logprob = None
         if with_logprob:
-            logprob = (torch.distributions.Normal(mu, std).log_prob(prob)).sum(dim=1)
-            logprob -= (2 * torch.tensor(np.log(2)) - prob - softplus(-2*prob)).sum(dim=1)
+            logprob = pi_distribution.log_prob(prob).sum(dim=-1)
+            logprob -= (2 * torch.tensor(np.log(2)) - prob - softplus(-2*prob)).sum(dim=-1)
 
         pi_action = torch.tanh(prob) * self.act_limit
 
         return (pi_action, logprob)
-
 
 class Critic(nn.Module):
     def __init__(self, obs_dim: int, act_dim: int, hidden_sizes: List[int]):
@@ -75,6 +75,7 @@ class Critic(nn.Module):
             x = F.relu(x)
 
         x = self.layers[-1](x)
+        x = torch.squeeze(x, -1)
         return x
 
 

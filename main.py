@@ -46,10 +46,10 @@ def eval_pi_loss(
     alpha: float
 ) -> torch.FloatTensor:
     pi, logp_pi = actor(next_state)
-    sa2 = torch.cat([state, pi], dim=-1)
+    sa2 = torch.cat([state, pi], dim=1)
     q1, q2 = critic(sa2)
 
-    q_pi = torch.min(torch.cat([q1, q2], dim=-1))
+    q_pi = torch.min(q1, q2)
     loss_pi = (alpha * logp_pi - q_pi).mean()
 
     return loss_pi
@@ -71,7 +71,7 @@ def eval_q_loss(
     a2, logp_ac = actor(next_states)
     sa2 = torch.cat([next_states, a2], dim=-1)
     q1_target, q2_target = target_critic(sa2)
-    q_target = torch.where(q1_target < q2_target, q1_target, q2_target)
+    q_target = torch.min(q1_target, q2_target)
 
     backup = rewards + gamma * (1 - done) * (
         q_target - alpha * logp_ac
@@ -208,6 +208,9 @@ class SAC(object):
 
                 next_state, reward, done, _ = self.env.step(action)
 
+                # Bypass max episode length limitation of gym
+                done = False if ep_len==params.max_ep_len else done
+
                 if render and proc_id() == 0:
                     self.env.render()
 
@@ -252,10 +255,10 @@ class SAC(object):
                         losses_q.append(loss_q.cpu().detach().numpy())
 
                         metrics = {
-                            "Episode Length": np.mean(episode_lengths),
-                            "Cumulative Reward": np.mean(episode_rewards),
-                            "Q Loss": np.mean(losses_q),
-                            "PI Loss": np.mean(losses_pi),
+                            "episode_length": np.mean(episode_lengths),
+                            "reward": np.mean(episode_rewards),
+                            "loss_q": np.mean(losses_q),
+                            "loss_pi": np.mean(losses_pi),
                         }
                         pbar.set_postfix(metrics)
 
