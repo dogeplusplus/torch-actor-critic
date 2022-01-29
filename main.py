@@ -5,12 +5,10 @@ import torch.nn as nn
 import numpy as np
 import torch.optim as optim
 
-from typing import Union
+from mpi4py import MPI
 from copy import deepcopy
 from torch import FloatTensor
 from dataclasses import dataclass
-from mpi4py import MPI
-from torch.cuda import FloatTensor as FloatCudaTensor
 
 from sac.buffer import ReplayBuffer, Batch
 from sac.networks import Actor, DoubleCritic
@@ -43,8 +41,8 @@ class TrainingParameters:
 def eval_pi_loss(
     actor: Actor,
     critic: DoubleCritic,
-    state: Union[FloatTensor, FloatCudaTensor],
-    next_state: Union[FloatTensor, FloatCudaTensor],
+    state: FloatTensor,
+    next_state: FloatTensor,
     alpha: float
 ) -> torch.FloatTensor:
     pi, logp_pi = actor(next_state)
@@ -61,11 +59,11 @@ def eval_q_loss(
     actor: Actor,
     critic: DoubleCritic,
     target_critic: DoubleCritic,
-    states: Union[FloatTensor, FloatCudaTensor],
-    actions: Union[FloatTensor, FloatCudaTensor],
-    rewards: Union[FloatTensor, FloatCudaTensor],
-    next_states: Union[FloatTensor, FloatCudaTensor],
-    done: Union[FloatTensor, FloatCudaTensor],
+    states: FloatTensor,
+    actions: FloatTensor,
+    rewards: FloatTensor,
+    next_states: FloatTensor,
+    done: FloatTensor,
     alpha: float,
     gamma: float,
 ) -> torch.FloatTensor:
@@ -131,7 +129,7 @@ class SAC(object):
         self.q_opt = optim.Adam(self.critic.parameters(), lr=self.params.learning_rate)
 
 
-    def update_critic(self, samples: Batch, alpha: float, gamma: float) -> Union[FloatTensor, FloatCudaTensor]:
+    def update_critic(self, samples: Batch, alpha: float, gamma: float) -> FloatTensor:
         self.q_opt.zero_grad()
         loss_q = eval_q_loss(
                 self.actor,
@@ -152,7 +150,7 @@ class SAC(object):
         return loss_q
 
 
-    def update_policy(self, samples: Batch, alpha: float) -> Union[FloatTensor, FloatCudaTensor]:
+    def update_policy(self, samples: Batch, alpha: float) -> FloatTensor:
 
         for p in self.critic.parameters():
             p.requires_grad = False
