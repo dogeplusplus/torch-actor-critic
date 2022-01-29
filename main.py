@@ -9,10 +9,19 @@ from typing import Union
 from copy import deepcopy
 from torch import FloatTensor
 from dataclasses import dataclass
+from mpi4py import MPI
 from torch.cuda import FloatTensor as FloatCudaTensor
 
-from sac.buffer import ReplayBuffer
+from sac.buffer import ReplayBuffer, Batch
 from sac.networks import Actor, DoubleCritic
+from sac.mpi import (
+    mpi_avg_grads,
+    mpi_fork,
+    setup_pytorch_for_mpi,
+    sync_params,
+    proc_id,
+    num_procs,
+)
 
 
 @dataclass(frozen=True)
@@ -40,11 +49,10 @@ def eval_pi_loss(
 ) -> torch.FloatTensor:
     pi, logp_pi = actor(next_state)
     sa2 = torch.cat([state, pi], dim=-1)
-    with torch.no_grad():
-        q1, q2 = critic(sa2)
+    q1, q2 = critic(sa2)
 
     q_pi = torch.min(torch.cat([q1, q2], dim=-1))
-    loss_pi = torch.mean(alpha * logp_pi - q_pi)
+    loss_pi = (alpha * logp_pi - q_pi).mean()
 
     return loss_pi
 
@@ -62,21 +70,20 @@ def eval_q_loss(
     gamma: float,
 ) -> torch.FloatTensor:
 
-    with torch.no_grad():
-        a2, logp_ac = actor(next_states)
-        sa2 = torch.cat([next_states, a2], dim=-1)
-        q1_target, q2_target = target_critic(sa2)
-        q_target = torch.where(q1_target < q2_target, q1_target, q2_target)
+    a2, logp_ac = actor(next_states)
+    sa2 = torch.cat([next_states, a2], dim=-1)
+    q1_target, q2_target = target_critic(sa2)
+    q_target = torch.where(q1_target < q2_target, q1_target, q2_target)
 
-        backup = rewards + gamma * (1 - done) * (
-            q_target - alpha * logp_ac
+    backup = rewards + gamma * (1 - done) * (
+        q_target - alpha * logp_ac
     )
 
     sa = torch.cat([states, actions], dim=-1)
     q1, q2 = critic(sa)
 
-    loss_q1 = torch.mean((q1 - backup) ** 2)
-    loss_q2 = torch.mean((q2 - backup) ** 2)
+    loss_q1 = ((q1 - backup) ** 2).mean()
+    loss_q2 = ((q2 - backup) ** 2).mean()
     loss_q = loss_q1 + loss_q2
 
     return loss_q
@@ -89,68 +96,122 @@ def update_targets(source: nn.Module, target: nn.Module, polyak: float):
             targ.data.add_((1 - polyak) * src.data)
 
 
-
 class SAC(object):
     def __init__(self, env, params: TrainingParameters):
         self.env = env
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.buffer = ReplayBuffer(
             params.buffer_size,
             env.observation_space.shape[0],
             env.action_space.shape[0],
-            self.device,
         )
         self.params = params
+        setup_pytorch_for_mpi()
 
-
-    def train(self):
-        state = self.env.reset()
-        params = self.params
-
-        step = 0
 
         act_dim = self.env.action_space.shape[0]
         obs_dim = self.env.observation_space.shape[0]
         hidden_sizes = [256, 256]
 
-        actor = Actor(obs_dim, act_dim, hidden_sizes)
-        double_critic = DoubleCritic(obs_dim, act_dim, hidden_sizes)
-        target_critic = deepcopy(double_critic)
+        self.actor = Actor(obs_dim, act_dim, hidden_sizes)
+        self.critic = DoubleCritic(obs_dim, act_dim, hidden_sizes)
+        self.target_critic = deepcopy(self.critic)
 
-        actor.to(self.device)
-        double_critic.to(self.device)
-        target_critic.to(self.device)
+        for p in self.target_critic.parameters():
+            p.requires_grad = False
 
-        pi_opt = optim.Adam(actor.parameters())
-        q_opt = optim.Adam(double_critic.parameters())
+        sync_params(self.actor)
+        sync_params(self.critic)
+        sync_params(self.target_critic)
 
-        for e in range(params.epochs):
-            ep_ret = 0
-            ep_len = 0
+        self.actor
+        self.critic
+        self.target_critic
 
-            pbar = tqdm.tqdm(
-                range(params.steps_per_epoch),
-                desc=f"Epoch {e+1:>4}",
-                bar_format="{l_bar}{bar:10}{r_bar}{bar:-10b}"
-            )
+        self.pi_opt = optim.Adam(self.actor.parameters(), lr=self.params.learning_rate)
+        self.q_opt = optim.Adam(self.critic.parameters(), lr=self.params.learning_rate)
 
-            cumulative_metrics = {
-                "q_loss": 0,
-                "pi_loss": 0,
-            }
 
-            for i in pbar:
+    def update_critic(self, samples: Batch, alpha: float, gamma: float) -> Union[FloatTensor, FloatCudaTensor]:
+        self.q_opt.zero_grad()
+        loss_q = eval_q_loss(
+                self.actor,
+                self.critic,
+                self.target_critic,
+                samples.states,
+                samples.actions,
+                samples.rewards,
+                samples.next_states,
+                samples.done,
+                alpha,
+                gamma,
+        )
+        loss_q.backward()
+        mpi_avg_grads(self.critic)
+        self.q_opt.step()
+
+        return loss_q
+
+
+    def update_policy(self, samples: Batch, alpha: float) -> Union[FloatTensor, FloatCudaTensor]:
+
+        for p in self.critic.parameters():
+            p.requires_grad = False
+
+        self.pi_opt.zero_grad()
+        loss_pi = eval_pi_loss(
+            self.actor,
+            self.critic,
+            samples.states,
+            samples.next_states,
+            alpha
+        )
+        mpi_avg_grads(self.actor)
+        loss_pi.backward()
+        self.pi_opt.step()
+
+        for p in self.critic.parameters():
+            p.requires_grad = True
+
+        return loss_pi
+
+
+    def train(self, render: bool = True):
+        comm = MPI.COMM_WORLD
+        seed = 10000 * proc_id()
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+
+        state = self.env.reset()
+        params = self.params
+
+        local_steps_per_epoch = int(params.steps_per_epoch / num_procs())
+        step = 0
+        ep_ret = 0
+        ep_len = 0
+
+        pbar = tqdm.tqdm(range(params.epochs), ncols=0)
+        for _ in pbar:
+            episode_rewards = []
+            episode_lengths = []
+            losses_pi = []
+            losses_q = []
+
+            for t in range(local_steps_per_epoch):
+
                 if step < params.start_steps:
                     action = self.env.action_space.sample()
                 else:
                     with torch.no_grad():
-                        action, _ = actor(
-                            FloatTensor(state).to(self.device)
+                        action, _ = self.actor(
+                            FloatTensor(state)
                         )
                         action = action.cpu().detach().numpy()
 
                 next_state, reward, done, _ = self.env.step(action)
-                self.env.render()
+
+                if render and proc_id() == 0:
+                    self.env.render()
+
                 ep_len += 1
                 ep_ret += reward
 
@@ -159,58 +220,53 @@ class SAC(object):
 
                 timeout = ep_len == params.max_ep_len
                 terminal = done or timeout
-                epoch_ended = i % params.steps_per_epoch == params.steps_per_epoch - 1
+                epoch_ended = t % local_steps_per_epoch == local_steps_per_epoch - 1
 
                 if terminal or epoch_ended:
+                    episode_rewards.append(ep_ret)
+                    episode_lengths.append(ep_len)
+
                     state = self.env.reset()
                     ep_ret = 0
                     ep_len = 0
+
+                if proc_id() == 0:
+                    for id in range(1, num_procs()):
+                        extra_rewards = comm.recv(source=id, tag=420)
+                        extra_lengths = comm.recv(source=id, tag=1337)
+
+                        episode_rewards.extend(extra_rewards)
+                        episode_lengths.extend(extra_lengths)
+                else:
+                    comm.send(episode_rewards, dest=0, tag=420)
+                    comm.send(episode_lengths, dest=0, tag=1337)
+
 
                 if step > params.update_after and step % params.update_every == 0:
                     for _ in range(params.update_every):
                         samples = self.buffer.sample(params.batch_size)
 
-                        q_opt.zero_grad()
-                        loss_q = eval_q_loss(
-                                actor,
-                                double_critic,
-                                target_critic,
-                                samples.states,
-                                samples.actions,
-                                samples.rewards,
-                                samples.next_states,
-                                samples.done,
-                                params.alpha,
-                                params.gamma,
-                        )
-                        loss_q.backward()
-                        q_opt.step()
+                        loss_q = self.update_critic(samples, params.alpha, params.gamma)
+                        loss_pi = self.update_policy(samples, params.alpha)
+                        update_targets(self.critic, self.target_critic, params.polyak)
 
-
-                        pi_opt.zero_grad()
-                        loss_pi = eval_pi_loss(
-                            actor,
-                            double_critic,
-                            samples.states,
-                            samples.next_states,
-                            params.alpha
-                        )
-
-                        loss_pi.backward()
-                        pi_opt.step()
-                        update_targets(double_critic, target_critic, params.polyak)
-                        cumulative_metrics["pi_loss"] += loss_pi.cpu().detach().numpy()
-                        cumulative_metrics["q_loss"] += loss_q.cpu().detach().numpy()
+                        losses_pi.append(loss_pi.cpu().detach().numpy())
+                        losses_q.append(loss_q.cpu().detach().numpy())
 
                         metrics = {
-                            "Episode Length": ep_len,
-                            "Cumulative Reward": ep_ret,
-                            "Q Loss": f"{cumulative_metrics['q_loss'] / (i + 1):.4g}",
-                            "PI Loss": f"{cumulative_metrics['pi_loss'] / (i + 1):.4g}",
+                            "Episode Length": np.mean(episode_lengths),
+                            "Cumulative Reward": np.mean(episode_rewards),
+                            "Q Loss": np.mean(losses_q),
+                            "PI Loss": np.mean(losses_pi),
                         }
                         pbar.set_postfix(metrics)
 
+
                 step += 1
+
+            # End of epoch
+            episode_lengths = []
+            episode_rewards = []
 
             state = self.env.reset()
             ep_ret = 0
@@ -220,17 +276,20 @@ def main():
     env = gym.make("Humanoid-v2")
 
     training_params = TrainingParameters(
-        epochs=10,
-        steps_per_epoch=4000,
+        epochs=500,
+        steps_per_epoch=10000,
         batch_size=100,
         start_steps=10000,
         update_after=1000,
         update_every=50,
-        learning_rate=1e-3,
+        learning_rate=3e-4,
         alpha=0.2,
         gamma=0.99,
-        polyak=0.99
+        polyak=0.995
     )
+
+    cpus = 8 
+    mpi_fork(cpus)
 
     sac = SAC(env, training_params)
     sac.train()

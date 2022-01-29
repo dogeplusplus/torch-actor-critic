@@ -3,22 +3,19 @@ import numpy as np
 from random import sample
 from dataclasses import dataclass
 from torch import FloatTensor
-from torch.cuda import FloatTensor as FloatCudaTensor
-
-from typing import Union
 
 
 @dataclass(frozen=True)
 class Batch:
-    states: Union[FloatTensor, FloatCudaTensor]
-    actions: Union[FloatTensor, FloatCudaTensor]
-    rewards: Union[FloatTensor, FloatCudaTensor]
-    next_states: Union[FloatTensor, FloatCudaTensor]
-    done: Union[FloatTensor, FloatCudaTensor]
+    states: FloatTensor
+    actions: FloatTensor
+    rewards: FloatTensor
+    next_states: FloatTensor
+    done: FloatTensor
 
 
 class ReplayBuffer:
-    def __init__(self, size: int, obs_dim: int, act_dim: int, device: str):
+    def __init__(self, size: int, obs_dim: int, act_dim: int):
         self.state = np.zeros((size, obs_dim), dtype=np.float32)
         self.actions = np.zeros((size, act_dim), dtype=np.float32)
         self.rewards = np.zeros(size, dtype=np.float32)
@@ -27,7 +24,6 @@ class ReplayBuffer:
 
         self.ptr = 0
         self.size = size
-        self.device = device
 
     def store(
         self,
@@ -52,10 +48,10 @@ class ReplayBuffer:
         idx = sample(range(self.ptr), batch_size)
 
         return Batch(
-            FloatTensor(self.state[idx]).to(self.device),
-            FloatTensor(self.actions[idx]).to(self.device),
-            FloatTensor(self.rewards[idx]).to(self.device),
-            FloatTensor(self.next_state[idx]).to(self.device),
-            FloatTensor(self.done[idx]).to(self.device),
+            FloatTensor(self.state[idx]),
+            FloatTensor(self.actions[idx]),
+            FloatTensor(self.rewards[idx]),
+            FloatTensor(self.next_state[idx]),
+            FloatTensor(self.done[idx]),
         )
 
