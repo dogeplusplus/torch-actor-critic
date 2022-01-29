@@ -108,9 +108,10 @@ class SAC(object):
 
         act_dim = self.env.action_space.shape[0]
         obs_dim = self.env.observation_space.shape[0]
+        act_limit = self.env.action_space.high[0]
         hidden_sizes = [256, 256]
 
-        self.actor = Actor(obs_dim, act_dim, hidden_sizes)
+        self.actor = Actor(obs_dim, act_dim, hidden_sizes, act_limit=act_limit)
         self.critic = DoubleCritic(obs_dim, act_dim, hidden_sizes)
         self.target_critic = deepcopy(self.critic)
 
@@ -243,7 +244,6 @@ class SAC(object):
                 if step > params.update_after and step % params.update_every == 0:
                     for _ in range(params.update_every):
                         samples = self.buffer.sample(params.batch_size)
-
                         loss_q = self.update_critic(samples, params.alpha, params.gamma)
                         loss_pi = self.update_policy(samples, params.alpha)
                         update_targets(self.critic, self.target_critic, params.polyak)
@@ -286,7 +286,7 @@ def main():
         polyak=0.995
     )
 
-    cpus = 8 
+    cpus = 8
     mpi_fork(cpus)
 
     sac = SAC(env, training_params)
