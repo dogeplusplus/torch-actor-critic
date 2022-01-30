@@ -54,4 +54,3 @@ class ReplayBuffer:
             FloatTensor(self.next_state[idx]),
             FloatTensor(self.done[idx]),
         )
-

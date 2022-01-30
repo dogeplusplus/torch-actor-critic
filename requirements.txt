@@ -1,7 +1,7 @@
-pre-commit
-pytest
-torch
 gym[all]
 mujoco-py==2.1.2.14
 numpy
+pre-commit
+pytest
+torch
 tqdm

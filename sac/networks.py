@@ -39,7 +39,6 @@ class Actor(nn.Module):
         self.log_max_std = log_max_std
         self.act_limit = act_limit
 
-
     def forward(self, x: FloatTensor, deterministic: bool = False, with_logprob: bool = True):
         for layer in self.layers:
             x = layer(x)
@@ -53,7 +52,7 @@ class Actor(nn.Module):
         pi_distribution = Normal(mu, std)
         prob = mu
         if not deterministic:
-                prob = pi_distribution.rsample()
+            prob = pi_distribution.rsample()
 
         logprob = None
         if with_logprob:
@@ -63,6 +62,7 @@ class Actor(nn.Module):
         pi_action = torch.tanh(prob) * self.act_limit
 
         return (pi_action, logprob)
+
 
 class Critic(nn.Module):
     def __init__(self, obs_dim: int, act_dim: int, hidden_sizes: List[int]):
@@ -87,4 +87,3 @@ class DoubleCritic(nn.Module):
 
     def forward(self, x: FloatTensor) -> Tuple[FloatTensor, FloatTensor]:
         return self.q1(x), self.q2(x)
-
