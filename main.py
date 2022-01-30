@@ -8,6 +8,7 @@ import torch.optim as optim
 
 from mpi4py import MPI
 from copy import deepcopy
+from itertools import count
 from torch import FloatTensor
 
 from sac.buffer import ReplayBuffer, Batch
@@ -257,11 +258,12 @@ class SAC(object):
 
                 step += 1
 
-            if e % save_every == 0:
-                self.save_model()
+            if proc_id() == 0:
+                if e % save_every == 0:
+                    self.save_model()
 
-            # End of epoch
-            mlflow.log_metrics(metrics, e)
+                # End of epoch
+                mlflow.log_metrics(metrics, e)
 
             episode_lengths = []
             episode_rewards = []
@@ -271,6 +273,29 @@ class SAC(object):
             state = self.env.reset()
             ep_ret = 0
             ep_len = 0
+
+
+def test_agent(
+    model_path: str,
+    env: gym.Env,
+    episodes: int,
+    deterministic: bool = True,
+    render: bool = True
+):
+    actor = mlflow.pytorch.load_model(model_path)
+
+    for e in range(episodes):
+        done = False
+        state = env.reset()
+        for _ in tqdm.tqdm(count(), desc=f"Epoch {e}"):
+            action = actor(state, deterministic=deterministic)
+            _, _, done, _ = env.step(action)
+
+            if render:
+                env.render()
+
+            if done:
+                break
 
 
 def main():
@@ -287,12 +312,12 @@ def main():
         alpha=0.2,
         gamma=0.99,
         polyak=0.995,
-        steps_per_epoch=5000,
+        steps_per_epoch=20000,
         start_steps=10000,
         update_after=1000,
         update_every=50,
         buffer_size=int(1e6),
-        max_ep_len=4000,
+        max_ep_len=100000,
         save_every=10,
     )
 
