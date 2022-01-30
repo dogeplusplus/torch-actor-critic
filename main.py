@@ -1,14 +1,14 @@
 import gym
 import tqdm
 import torch
-import torch.nn as nn
+import mlflow
 import numpy as np
+import torch.nn as nn
 import torch.optim as optim
 
 from mpi4py import MPI
 from copy import deepcopy
 from torch import FloatTensor
-from dataclasses import dataclass
 
 from sac.buffer import ReplayBuffer, Batch
 from sac.networks import Actor, DoubleCritic
@@ -20,22 +20,6 @@ from sac.mpi import (
     proc_id,
     num_procs,
 )
-
-
-@dataclass(frozen=True)
-class TrainingParameters:
-    epochs: int
-    steps_per_epoch: int
-    batch_size: int
-    start_steps: int
-    update_after: int
-    update_every: int
-    learning_rate: float
-    alpha: float
-    gamma: float
-    polyak: float
-    buffer_size: int = int(1e6)
-    max_ep_len: int = 4000
 
 
 def eval_pi_loss(
@@ -95,16 +79,9 @@ def update_targets(source: nn.Module, target: nn.Module, polyak: float):
 
 
 class SAC(object):
-    def __init__(self, env, params: TrainingParameters):
+    def __init__(self, env):
         self.env = env
-        self.buffer = ReplayBuffer(
-            params.buffer_size,
-            env.observation_space.shape[0],
-            env.action_space.shape[0],
-        )
-        self.params = params
         setup_pytorch_for_mpi()
-
 
         act_dim = self.env.action_space.shape[0]
         obs_dim = self.env.observation_space.shape[0]
@@ -122,34 +99,25 @@ class SAC(object):
         sync_params(self.critic)
         sync_params(self.target_critic)
 
-        self.actor
-        self.critic
-        self.target_critic
-
-        self.pi_opt = optim.Adam(self.actor.parameters(), lr=self.params.learning_rate)
-        self.q_opt = optim.Adam(self.critic.parameters(), lr=self.params.learning_rate)
-
-
     def update_critic(self, samples: Batch, alpha: float, gamma: float) -> FloatTensor:
         self.q_opt.zero_grad()
         loss_q = eval_q_loss(
-                self.actor,
-                self.critic,
-                self.target_critic,
-                samples.states,
-                samples.actions,
-                samples.rewards,
-                samples.next_states,
-                samples.done,
-                alpha,
-                gamma,
+            self.actor,
+            self.critic,
+            self.target_critic,
+            samples.states,
+            samples.actions,
+            samples.rewards,
+            samples.next_states,
+            samples.done,
+            alpha,
+            gamma,
         )
         loss_q.backward()
         mpi_avg_grads(self.critic)
         self.q_opt.step()
 
         return loss_q
-
 
     def update_policy(self, samples: Batch, alpha: float) -> FloatTensor:
 
@@ -173,23 +141,51 @@ class SAC(object):
 
         return loss_pi
 
+    def save_model(self):
+        mlflow.pytorch.log_model(self.actor, "actor")
+        mlflow.pytorch.log_model(self.critic, "critic")
+        mlflow.pytorch.log_model(self.target_critic, "target_critic")
 
-    def train(self, render: bool = True):
+    def train(
+        self,
+        epochs: int,
+        batch_size: int,
+        learning_rate: float,
+        alpha: float,
+        gamma: float,
+        polyak: float,
+        start_steps: int,
+        steps_per_epoch: int,
+        buffer_size: int,
+        max_ep_len: int,
+        update_after: int,
+        update_every: int,
+        save_every: int,
+        render: bool = True
+    ):
         comm = MPI.COMM_WORLD
         seed = 10000 * proc_id()
         torch.manual_seed(seed)
         np.random.seed(seed)
 
         state = self.env.reset()
-        params = self.params
 
-        local_steps_per_epoch = int(params.steps_per_epoch / num_procs())
+        self.pi_opt = optim.Adam(self.actor.parameters(), lr=learning_rate)
+        self.q_opt = optim.Adam(self.critic.parameters(), lr=learning_rate)
+
+        self.buffer = ReplayBuffer(
+            buffer_size,
+            self.env.observation_space.shape[0],
+            self.env.action_space.shape[0],
+        )
+
+        local_steps_per_epoch = int(steps_per_epoch / num_procs())
         step = 0
         ep_ret = 0
         ep_len = 0
 
-        pbar = tqdm.tqdm(range(params.epochs), ncols=0)
-        for _ in pbar:
+        pbar = tqdm.tqdm(range(epochs), ncols=0)
+        for e in pbar:
             episode_rewards = []
             episode_lengths = []
             losses_pi = []
@@ -197,19 +193,17 @@ class SAC(object):
 
             for t in range(local_steps_per_epoch):
 
-                if step < params.start_steps:
+                if step < start_steps:
                     action = self.env.action_space.sample()
                 else:
                     with torch.no_grad():
-                        action, _ = self.actor(
-                            FloatTensor(state)
-                        )
+                        action, _ = self.actor(FloatTensor(state))
                         action = action.cpu().detach().numpy()
 
                 next_state, reward, done, _ = self.env.step(action)
 
                 # Bypass max episode length limitation of gym
-                done = False if ep_len==params.max_ep_len else done
+                done = False if ep_len == max_ep_len else done
 
                 if render and proc_id() == 0:
                     self.env.render()
@@ -220,7 +214,7 @@ class SAC(object):
                 self.buffer.store(state, action, reward, next_state, done)
                 state = next_state
 
-                timeout = ep_len == params.max_ep_len
+                timeout = ep_len == max_ep_len
                 terminal = done or timeout
                 epoch_ended = t % local_steps_per_epoch == local_steps_per_epoch - 1
 
@@ -243,13 +237,12 @@ class SAC(object):
                     comm.send(episode_rewards, dest=0, tag=420)
                     comm.send(episode_lengths, dest=0, tag=1337)
 
-
-                if step > params.update_after and step % params.update_every == 0:
-                    for _ in range(params.update_every):
-                        samples = self.buffer.sample(params.batch_size)
-                        loss_q = self.update_critic(samples, params.alpha, params.gamma)
-                        loss_pi = self.update_policy(samples, params.alpha)
-                        update_targets(self.critic, self.target_critic, params.polyak)
+                if step > update_after and step % update_every == 0:
+                    for _ in range(update_every):
+                        samples = self.buffer.sample(batch_size)
+                        loss_q = self.update_critic(samples, alpha, gamma)
+                        loss_pi = self.update_policy(samples, alpha)
+                        update_targets(self.critic, self.target_critic, polyak)
 
                         losses_pi.append(loss_pi.cpu().detach().numpy())
                         losses_q.append(loss_q.cpu().detach().numpy())
@@ -262,38 +255,46 @@ class SAC(object):
                         }
                         pbar.set_postfix(metrics)
 
-
                 step += 1
 
+            if e % save_every == 0:
+                self.save_model()
+
             # End of epoch
+            mlflow.log_metrics(metrics, e)
+
             episode_lengths = []
             episode_rewards = []
+            losses_pi = []
+            losses_q = []
 
             state = self.env.reset()
             ep_ret = 0
             ep_len = 0
 
+
 def main():
     env = gym.make("Humanoid-v2")
-
-    training_params = TrainingParameters(
-        epochs=500,
-        steps_per_epoch=10000,
-        batch_size=100,
-        start_steps=10000,
-        update_after=1000,
-        update_every=50,
-        learning_rate=3e-4,
-        alpha=0.2,
-        gamma=0.99,
-        polyak=0.995
-    )
 
     cpus = 8
     mpi_fork(cpus)
 
-    sac = SAC(env, training_params)
-    sac.train()
+    sac = SAC(env)
+    sac.train(
+        epochs=500,
+        learning_rate=3e-4,
+        batch_size=100,
+        alpha=0.2,
+        gamma=0.99,
+        polyak=0.995,
+        steps_per_epoch=5000,
+        start_steps=10000,
+        update_after=1000,
+        update_every=50,
+        buffer_size=int(1e6),
+        max_ep_len=4000,
+        save_every=10,
+    )
 
 
 if __name__ == "__main__":
