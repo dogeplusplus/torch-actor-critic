@@ -23,7 +23,8 @@ class ReplayBuffer:
         self.done = np.zeros(size, dtype=np.bool)
 
         self.ptr = 0
-        self.size = size
+        self.size = 0
+        self.max_size = size
 
     def store(
         self,
@@ -33,19 +34,19 @@ class ReplayBuffer:
         next_obs: np.ndarray,
         done: np.ndarray
     ):
-        assert self.ptr < self.size
         self.state[self.ptr] = obs
         self.actions[self.ptr] = act
         self.rewards[self.ptr] = rew
         self.next_state[self.ptr] = next_obs
         self.done[self.ptr] = done
-        self.ptr += 1
+        self.ptr = (self.ptr + 1) % self.max_size
+        self.size = min(self.size + 1, self.max_size)
 
     def sample(self, batch_size) -> Batch:
         assert self.ptr >= batch_size, "Number of samples less than batch size."
         assert self.ptr <= self.size, "Number of samples must be at most buffer size."
 
-        idx = sample(range(self.ptr), batch_size)
+        idx = sample(range(self.size), batch_size)
 
         return Batch(
             FloatTensor(self.state[idx]),
