@@ -186,6 +186,12 @@ class SAC(object):
         ep_len = 0
 
         pbar = tqdm.tqdm(range(epochs), ncols=0)
+        metrics = {
+            "episode_length": 0,
+            "reward": 0,
+            "loss_q": 0,
+            "loss_pi": 0,
+        }
         for e in pbar:
             episode_rewards = []
             episode_lengths = []
@@ -248,14 +254,13 @@ class SAC(object):
                         losses_pi.append(loss_pi.cpu().detach().numpy())
                         losses_q.append(loss_q.cpu().detach().numpy())
 
-                        metrics = {
-                            "episode_length": np.mean(episode_lengths),
-                            "reward": np.mean(episode_rewards),
-                            "loss_q": np.mean(losses_q),
-                            "loss_pi": np.mean(losses_pi),
-                        }
-                        pbar.set_postfix(metrics)
-
+                metrics = {
+                    "episode_length": np.mean(episode_lengths),
+                    "reward": np.mean(episode_rewards),
+                    "loss_q": np.mean(losses_q),
+                    "loss_pi": np.mean(losses_pi),
+                }
+                pbar.set_postfix(metrics)
                 step += 1
 
             if proc_id() == 0:
@@ -288,8 +293,8 @@ def test_agent(
         done = False
         state = env.reset()
         for _ in tqdm.tqdm(count(), desc=f"Epoch {e}"):
-            action = actor(state, deterministic=deterministic)
-            _, _, done, _ = env.step(action)
+            action, _ = actor(FloatTensor(state), deterministic=deterministic)
+            _, _, done, _ = env.step(action.detach().numpy())
 
             if render:
                 env.render()
@@ -301,18 +306,18 @@ def test_agent(
 def main():
     env = gym.make("Humanoid-v2")
 
-    cpus = 8
+    cpus = 1
     mpi_fork(cpus)
 
     sac = SAC(env)
     sac.train(
-        epochs=500,
+        epochs=1000,
         learning_rate=3e-4,
-        batch_size=100,
+        batch_size=500,
         alpha=0.2,
         gamma=0.99,
         polyak=0.995,
-        steps_per_epoch=20000,
+        steps_per_epoch=10000,
         start_steps=10000,
         update_after=1000,
         update_every=50,
