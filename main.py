@@ -164,6 +164,12 @@ class SAC(object):
         save_every: int,
         render: bool = True
     ):
+        # Log parameters in mlflow run
+        if proc_id() == 0:
+            for name, param_value in vars().items():
+                if name != "self":
+                    mlflow.log_param(name, param_value)
+
         comm = MPI.COMM_WORLD
         seed = 10000 * proc_id()
         torch.manual_seed(seed)
@@ -304,9 +310,9 @@ def test_agent(
 
 
 def main():
-    env = gym.make("Humanoid-v2")
+    env = gym.make("Humanoid-v3")
 
-    cpus = 1
+    cpus = 8
     mpi_fork(cpus)
 
     sac = SAC(env)
@@ -317,12 +323,12 @@ def main():
         alpha=0.2,
         gamma=0.99,
         polyak=0.995,
-        steps_per_epoch=10000,
+        steps_per_epoch=40000,
         start_steps=10000,
         update_after=1000,
         update_every=50,
         buffer_size=int(1e6),
-        max_ep_len=100000,
+        max_ep_len=1000,
         save_every=10,
     )
 
