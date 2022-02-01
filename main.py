@@ -227,11 +227,9 @@ class SAC(object):
                 self.buffer.store(state, action, reward, next_state, done)
                 state = next_state
 
-                timeout = ep_len == max_ep_len
-                terminal = done or timeout
                 epoch_ended = t % local_steps_per_epoch == local_steps_per_epoch - 1
 
-                if terminal or epoch_ended:
+                if done or epoch_ended:
                     episode_rewards.append(ep_ret)
                     episode_lengths.append(ep_len)
 
@@ -260,15 +258,15 @@ class SAC(object):
                         losses_pi.append(loss_pi.cpu().detach().numpy())
                         losses_q.append(loss_q.cpu().detach().numpy())
 
-                metrics = {
-                    "episode_length": np.mean(episode_lengths),
-                    "reward": np.mean(episode_rewards),
-                    "loss_q": np.mean(losses_q),
-                    "loss_pi": np.mean(losses_pi),
-                }
-                pbar.set_postfix(metrics)
                 step += 1
 
+            metrics = {
+                "episode_length": np.mean(episode_lengths),
+                "reward": np.mean(episode_rewards),
+                "loss_q": np.mean(losses_q),
+                "loss_pi": np.mean(losses_pi),
+            }
+            pbar.set_postfix(metrics)
             if proc_id() == 0:
                 if e % save_every == 0:
                     self.save_model()
@@ -311,8 +309,9 @@ def test_agent(
 
 def main():
     env = gym.make("Humanoid-v3")
+    env._max_episode_steps = 10000
 
-    cpus = 8
+    cpus = 1
     mpi_fork(cpus)
 
     sac = SAC(env)
@@ -323,13 +322,14 @@ def main():
         alpha=0.2,
         gamma=0.99,
         polyak=0.995,
-        steps_per_epoch=40000,
+        steps_per_epoch=5000,
         start_steps=10000,
         update_after=1000,
         update_every=50,
         buffer_size=int(1e6),
-        max_ep_len=1000,
+        max_ep_len=5000,
         save_every=10,
+        render=False,
     )
 
 
