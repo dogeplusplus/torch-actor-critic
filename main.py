@@ -298,7 +298,7 @@ def test_agent(
         state = env.reset()
         for _ in tqdm.tqdm(count(), desc=f"Epoch {e}"):
             action, _ = actor(FloatTensor(state), deterministic=deterministic)
-            _, _, done, _ = env.step(action.detach().numpy())
+            state, _, done, _ = env.step(action.detach().numpy())
 
             if render:
                 env.render()
