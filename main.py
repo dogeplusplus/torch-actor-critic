@@ -285,13 +285,12 @@ class SAC(object):
 
 
 def test_agent(
-    model_path: str,
+    actor: nn.Module,
     env: gym.Env,
     episodes: int,
     deterministic: bool = True,
     render: bool = True
 ):
-    actor = mlflow.pytorch.load_model(model_path)
 
     for e in range(episodes):
         done = False
