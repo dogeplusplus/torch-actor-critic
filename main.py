@@ -7,11 +7,10 @@ import torch.nn as nn
 import torch.optim as optim
 
 from mpi4py import MPI
-from copy import deepcopy
-from itertools import count
-from torch import FloatTensor
-from argparse import ArgumentParser
 from pathlib import Path
+from copy import deepcopy
+from torch import FloatTensor
+from argparse import ArgumentParser, Namespace
 
 from sac.buffer import ReplayBuffer, Batch
 from sac.networks import Actor, DoubleCritic
@@ -298,29 +297,7 @@ class SAC(object):
             ep_len = 0
 
 
-def test_agent(
-    actor: nn.Module,
-    env: gym.Env,
-    episodes: int,
-    deterministic: bool = True,
-    render: bool = True
-):
-
-    for e in range(episodes):
-        done = False
-        state = env.reset()
-        for _ in tqdm.tqdm(count(), desc=f"Epoch {e}"):
-            action, _ = actor(FloatTensor(state), deterministic=deterministic)
-            state, _, done, _ = env.step(action.detach().numpy())
-
-            if render:
-                env.render()
-
-            if done:
-                break
-
-
-def parse_arguments():
+def parse_arguments() -> Namespace:
     parser = ArgumentParser("Soft Actor-Critic trainer for MuJoCo.")
     parser.add_argument("--run", type=str, default=None, help="Path to pre-existing mlflow run")
 
