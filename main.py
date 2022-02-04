@@ -10,6 +10,8 @@ from mpi4py import MPI
 from copy import deepcopy
 from itertools import count
 from torch import FloatTensor
+from argparse import ArgumentParser
+from pathlib import Path
 
 from sac.buffer import ReplayBuffer, Batch
 from sac.networks import Actor, DoubleCritic
@@ -80,118 +82,130 @@ def update_targets(source: nn.Module, target: nn.Module, polyak: float):
 
 
 class SAC(object):
-    def __init__(self, env):
-        self.env = env
+    def __init__(self, alpha, gamma, polyak):
+        self.alpha = alpha
+        self.gamma = gamma
+        self.polyak = polyak
+
         setup_pytorch_for_mpi()
 
-        act_dim = self.env.action_space.shape[0]
-        obs_dim = self.env.observation_space.shape[0]
-        act_limit = self.env.action_space.high[0]
-        hidden_sizes = [256, 256]
-
-        self.actor = Actor(obs_dim, act_dim, hidden_sizes, act_limit=act_limit)
-        self.critic = DoubleCritic(obs_dim, act_dim, hidden_sizes)
-        self.target_critic = deepcopy(self.critic)
-
-        for p in self.target_critic.parameters():
-            p.requires_grad = False
-
-        sync_params(self.actor)
-        sync_params(self.critic)
-        sync_params(self.target_critic)
-
-    def update_critic(self, samples: Batch, alpha: float, gamma: float) -> FloatTensor:
-        self.q_opt.zero_grad()
+    def update_critic(
+        self,
+        q_opt: optim.Optimizer,
+        actor: Actor,
+        critic: DoubleCritic,
+        target_critic: DoubleCritic,
+        samples: Batch
+    ) -> FloatTensor:
+        q_opt.zero_grad()
         loss_q = eval_q_loss(
-            self.actor,
-            self.critic,
-            self.target_critic,
+            actor,
+            critic,
+            target_critic,
             samples.states,
             samples.actions,
             samples.rewards,
             samples.next_states,
             samples.done,
-            alpha,
-            gamma,
+            self.alpha,
+            self.gamma,
         )
         loss_q.backward()
-        mpi_avg_grads(self.critic)
-        self.q_opt.step()
+        mpi_avg_grads(critic)
+        q_opt.step()
 
         return loss_q
 
-    def update_policy(self, samples: Batch, alpha: float) -> FloatTensor:
+    def update_policy(self, pi_opt: optim.Optimizer, actor: Actor, critic: DoubleCritic, samples: Batch) -> FloatTensor:
 
-        for p in self.critic.parameters():
+        for p in critic.parameters():
             p.requires_grad = False
 
-        self.pi_opt.zero_grad()
+        pi_opt.zero_grad()
         loss_pi = eval_pi_loss(
-            self.actor,
-            self.critic,
+            actor,
+            critic,
             samples.states,
             samples.next_states,
-            alpha
+            self.alpha
         )
-        mpi_avg_grads(self.actor)
+        mpi_avg_grads(actor)
         loss_pi.backward()
-        self.pi_opt.step()
+        pi_opt.step()
 
-        for p in self.critic.parameters():
+        for p in critic.parameters():
             p.requires_grad = True
 
         return loss_pi
 
-    def save_model(self):
-        mlflow.pytorch.log_model(self.actor, "actor")
-        mlflow.pytorch.log_model(self.critic, "critic")
-        mlflow.pytorch.log_model(self.target_critic, "target_critic")
+    def save_model(self, actor, critic, pi_opt, q_opt, epoch):
+        mlflow.pytorch.log_model(actor, "actor")
+        mlflow.pytorch.log_model(critic, "critic")
+
+        mlflow.pytorch.log_state_dict({
+            "pi_opt": pi_opt.state_dict(),
+            "q_opt": q_opt.state_dict(),
+            "epoch": epoch,
+        }, "auxiliaries.pth")
 
     def train(
         self,
+        start_epoch: int,
         epochs: int,
         batch_size: int,
-        learning_rate: float,
-        alpha: float,
-        gamma: float,
-        polyak: float,
         start_steps: int,
         steps_per_epoch: int,
-        buffer_size: int,
         max_ep_len: int,
+        env: gym.Env,
+        actor: Actor,
+        critic: DoubleCritic,
+        buffer: ReplayBuffer,
+        pi_opt: optim.Optimizer,
+        q_opt: optim.Optimizer,
         update_after: int,
         update_every: int,
         save_every: int,
         render: bool = True
     ):
+        target_critic = deepcopy(critic)
+        for p in target_critic.parameters():
+            p.requires_grad = False
+
+        sync_params(actor)
+        sync_params(critic)
+        sync_params(target_critic)
+
         # Log parameters in mlflow run
         if proc_id() == 0:
-            for name, param_value in vars().items():
-                if name != "self":
-                    mlflow.log_param(name, param_value)
+            parameters = dict(
+                alpha=self.alpha,
+                gamma=self.gamma,
+                polyak=self.polyak,
+                start_steps=start_steps,
+                steps_per_epoch=steps_per_epoch,
+                max_ep_len=max_ep_len,
+                update_after=update_after,
+                update_every=update_every,
+                save_every=save_every,
+                batch_size=batch_size,
+            )
+
+            for name, value in parameters.items():
+                mlflow.log_param(name, value)
 
         comm = MPI.COMM_WORLD
         seed = 10000 * proc_id()
         torch.manual_seed(seed)
         np.random.seed(seed)
 
-        state = self.env.reset()
-
-        self.pi_opt = optim.Adam(self.actor.parameters(), lr=learning_rate)
-        self.q_opt = optim.Adam(self.critic.parameters(), lr=learning_rate)
-
-        self.buffer = ReplayBuffer(
-            buffer_size,
-            self.env.observation_space.shape[0],
-            self.env.action_space.shape[0],
-        )
+        state = env.reset()
 
         local_steps_per_epoch = int(steps_per_epoch / num_procs())
         step = 0
         ep_ret = 0
         ep_len = 0
 
-        pbar = tqdm.tqdm(range(epochs), ncols=0)
+        pbar = tqdm.trange(start_epoch, start_epoch + epochs, ncols=0, initial=start_epoch)
         metrics = {
             "episode_length": 0,
             "reward": 0,
@@ -207,24 +221,24 @@ class SAC(object):
             for t in range(local_steps_per_epoch):
 
                 if step < start_steps:
-                    action = self.env.action_space.sample()
+                    action = env.action_space.sample()
                 else:
                     with torch.no_grad():
-                        action, _ = self.actor(FloatTensor(state))
+                        action, _ = actor(FloatTensor(state))
                         action = action.cpu().detach().numpy()
 
-                next_state, reward, done, _ = self.env.step(action)
+                next_state, reward, done, _ = env.step(action)
 
                 # Bypass max episode length limitation of gym
                 done = False if ep_len == max_ep_len else done
 
                 if render and proc_id() == 0:
-                    self.env.render()
+                    env.render()
 
                 ep_len += 1
                 ep_ret += reward
 
-                self.buffer.store(state, action, reward, next_state, done)
+                buffer.store(state, action, reward, next_state, done)
                 state = next_state
 
                 epoch_ended = t % local_steps_per_epoch == local_steps_per_epoch - 1
@@ -233,7 +247,7 @@ class SAC(object):
                     episode_rewards.append(ep_ret)
                     episode_lengths.append(ep_len)
 
-                    state = self.env.reset()
+                    state = env.reset()
                     ep_ret = 0
                     ep_len = 0
 
@@ -250,10 +264,10 @@ class SAC(object):
 
                 if step > update_after and step % update_every == 0:
                     for _ in range(update_every):
-                        samples = self.buffer.sample(batch_size)
-                        loss_q = self.update_critic(samples, alpha, gamma)
-                        loss_pi = self.update_policy(samples, alpha)
-                        update_targets(self.critic, self.target_critic, polyak)
+                        samples = buffer.sample(batch_size)
+                        loss_q = self.update_critic(q_opt, actor, critic, target_critic, samples)
+                        loss_pi = self.update_policy(pi_opt, actor, critic, samples)
+                        update_targets(critic, target_critic, self.polyak)
 
                         losses_pi.append(loss_pi.cpu().detach().numpy())
                         losses_q.append(loss_q.cpu().detach().numpy())
@@ -269,7 +283,7 @@ class SAC(object):
             pbar.set_postfix(metrics)
             if proc_id() == 0:
                 if e % save_every == 0:
-                    self.save_model()
+                    self.save_model(actor, critic, pi_opt, q_opt, e)
 
                 # End of epoch
                 mlflow.log_metrics(metrics, e)
@@ -279,7 +293,7 @@ class SAC(object):
             losses_pi = []
             losses_q = []
 
-            state = self.env.reset()
+            state = env.reset()
             ep_ret = 0
             ep_len = 0
 
@@ -306,30 +320,85 @@ def test_agent(
                 break
 
 
+def parse_arguments():
+    parser = ArgumentParser("Soft Actor-Critic trainer for MuJoCo.")
+    parser.add_argument("--run", type=str, default=None, help="Path to pre-existing mlflow run")
+
+    args = parser.parse_args()
+    return args
+
+
 def main():
+    args = parse_arguments()
     env = gym.make("Humanoid-v3")
     env._max_episode_steps = 10000
 
     cpus = 1
     mpi_fork(cpus)
 
-    sac = SAC(env)
-    sac.train(
-        epochs=1000,
-        learning_rate=3e-4,
-        batch_size=500,
+    run_id = args.run
+
+    if run_id is not None:
+        artifacts_path = Path("mlruns", "0", run_id, "artifacts")
+
+        actor = mlflow.pytorch.load_model(artifacts_path.joinpath("actor"))
+        critic = mlflow.pytorch.load_model(artifacts_path.joinpath("critic"))
+
+        auxiliaries = mlflow.pytorch.load_state_dict(artifacts_path.joinpath("auxiliaries.pth"))
+        pi_opt = optim.Adam(actor.parameters())
+        pi_opt.load_state_dict(auxiliaries["pi_opt"])
+
+        q_opt = optim.Adam(critic.parameters())
+        q_opt.load_state_dict(auxiliaries["q_opt"])
+
+        start_epoch = auxiliaries["epoch"]
+    else:
+        start_epoch = 0
+        act_dim = env.action_space.shape[0]
+        obs_dim = env.observation_space.shape[0]
+        act_limit = env.action_space.high[0]
+        hidden_sizes = [256, 256]
+
+        actor = Actor(obs_dim, act_dim, hidden_sizes, act_limit=act_limit)
+        critic = DoubleCritic(obs_dim, act_dim, hidden_sizes)
+
+        learning_rate = 3e-4
+
+        pi_opt = optim.Adam(actor.parameters(), lr=learning_rate)
+        q_opt = optim.Adam(critic.parameters(), lr=learning_rate)
+
+    buffer_size = int(1e6)
+    buffer = ReplayBuffer(
+        buffer_size,
+        env.observation_space.shape[0],
+        env.action_space.shape[0],
+    )
+
+    sac = SAC(
         alpha=0.2,
         gamma=0.99,
         polyak=0.995,
-        steps_per_epoch=5000,
-        start_steps=10000,
-        update_after=1000,
-        update_every=50,
-        buffer_size=int(1e6),
-        max_ep_len=5000,
-        save_every=10,
-        render=False,
     )
+
+    with mlflow.start_run(run_id):
+        sac.train(
+            start_epoch=start_epoch,
+            epochs=1000,
+            batch_size=500,
+            steps_per_epoch=50,
+            start_steps=10000,
+            update_after=1000,
+            update_every=50,
+            max_ep_len=5000,
+            save_every=10,
+            render=False,
+            buffer=buffer,
+            env=env,
+            actor=actor,
+            critic=critic,
+            pi_opt=pi_opt,
+            q_opt=q_opt,
+        )
 
 
 if __name__ == "__main__":
