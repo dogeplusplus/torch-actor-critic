@@ -10,6 +10,7 @@ from mpi4py import MPI
 from pathlib import Path
 from copy import deepcopy
 from torch import FloatTensor
+from contextlib import nullcontext
 from argparse import ArgumentParser, Namespace
 
 from sac.buffer import ReplayBuffer, Batch
@@ -52,6 +53,7 @@ def eval_q_loss(
     done: FloatTensor,
     alpha: float,
     gamma: float,
+    reward_scale: float,
 ) -> torch.FloatTensor:
 
     a2, logp_ac = actor(next_states)
@@ -59,7 +61,7 @@ def eval_q_loss(
     q1_target, q2_target = target_critic(sa2)
     q_target = torch.min(q1_target, q2_target)
 
-    backup = rewards + gamma * (1 - done) * (
+    backup = reward_scale * rewards + gamma * (1 - done) * (
         q_target - alpha * logp_ac
     )
 
@@ -81,10 +83,11 @@ def update_targets(source: nn.Module, target: nn.Module, polyak: float):
 
 
 class SAC(object):
-    def __init__(self, alpha, gamma, polyak):
+    def __init__(self, alpha: float, gamma: float, polyak: float, reward_scale: float):
         self.alpha = alpha
         self.gamma = gamma
         self.polyak = polyak
+        self.reward_scale = reward_scale
 
         setup_pytorch_for_mpi()
 
@@ -108,6 +111,7 @@ class SAC(object):
             samples.done,
             self.alpha,
             self.gamma,
+            self.reward_scale,
         )
         loss_q.backward()
         mpi_avg_grads(critic)
@@ -187,10 +191,9 @@ class SAC(object):
                 update_every=update_every,
                 save_every=save_every,
                 batch_size=batch_size,
+                reward_scale=self.reward_scale,
             )
-
-            for name, value in parameters.items():
-                mlflow.log_param(name, value)
+            mlflow.log_params(parameters)
 
         comm = MPI.COMM_WORLD
         seed = 10000 * proc_id()
@@ -309,7 +312,7 @@ def main():
     env = gym.make("Humanoid-v3")
     env._max_episode_steps = 10000
 
-    cpus = 1
+    cpus = 4
     mpi_fork(cpus)
 
     run_id = args.run
@@ -354,9 +357,16 @@ def main():
         alpha=0.2,
         gamma=0.99,
         polyak=0.995,
+        reward_scale=10.,
     )
 
-    with mlflow.start_run(run_id):
+    # Start run only if process id 0
+    if proc_id() == 0:
+        context = mlflow.start_run(run_id)
+    else:
+        context = nullcontext()
+
+    with context:
         sac.train(
             start_epoch=start_epoch,
             epochs=1000,
