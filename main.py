@@ -199,7 +199,6 @@ class SAC(object):
 
         state = env.reset()
 
-        local_steps_per_epoch = int(steps_per_epoch / num_procs())
         step = 0
         ep_ret = 0
         ep_len = 0
@@ -217,7 +216,7 @@ class SAC(object):
             losses_pi = []
             losses_q = []
 
-            for t in range(local_steps_per_epoch):
+            for t in range(steps_per_epoch):
 
                 if step < start_steps:
                     action = env.action_space.sample()
@@ -240,7 +239,7 @@ class SAC(object):
                 buffer.store(state, action, reward, next_state, done)
                 state = next_state
 
-                epoch_ended = t % local_steps_per_epoch == local_steps_per_epoch - 1
+                epoch_ended = t % steps_per_epoch == steps_per_epoch - 1
 
                 if done or epoch_ended:
                     episode_rewards.append(ep_ret)
@@ -362,13 +361,13 @@ def main():
             start_epoch=start_epoch,
             epochs=1000,
             batch_size=500,
-            steps_per_epoch=50,
+            steps_per_epoch=2000,
             start_steps=10000,
             update_after=1000,
             update_every=50,
             max_ep_len=5000,
             save_every=10,
-            render=False,
+            render=True,
             buffer=buffer,
             env=env,
             actor=actor,
