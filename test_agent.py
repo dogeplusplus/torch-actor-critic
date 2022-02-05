@@ -16,7 +16,6 @@ def test_agent(
     deterministic: bool = True,
     render: bool = True
 ):
-
     for e in range(episodes):
         done = False
         state = env.reset()
@@ -35,8 +34,8 @@ def parse_arguments() -> Namespace:
     parser = ArgumentParser("Soft Actor-Critic trainer for MuJoCo.")
     parser.add_argument("--run", type=str, help="Path to pre-existing mlflow run")
     parser.add_argument("--episodes", type=int, default=100, help="Number of test episodes")
-    parser.add_argument("--render", type=bool, default=True, help="Flag to enable rendering")
-    parser.add_argument("--deterministic", type=bool, default=True, help="Deterministic policy")
+    parser.add_argument("--headless", action="store_false", dest="render", help="Flag to disable rendering")
+    parser.add_argument("--random", action="store_false", dest="deterministic", help="Stochastic policy")
 
     args = parser.parse_args()
     return args
@@ -47,6 +46,7 @@ def main():
     env = gym.make("Humanoid-v3")
     actor_path = Path("mlruns", "0", args.run, "artifacts", "actor")
     actor = mlflow.pytorch.load_model(actor_path)
+
     test_agent(actor, env, args.episodes, args.deterministic, args.render)
 
 
