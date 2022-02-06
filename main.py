@@ -2,6 +2,7 @@ import gym
 import tqdm
 import torch
 import mlflow
+import logging
 import numpy as np
 import torch.nn as nn
 import torch.optim as optim
@@ -15,6 +16,7 @@ from argparse import ArgumentParser, Namespace
 
 from sac.buffer import ReplayBuffer, Batch
 from sac.networks import Actor, DoubleCritic
+from sac.utils import WelfordVarianceEstimate, StateNormalizer, Identity
 from sac.mpi import (
     mpi_avg_grads,
     mpi_fork,
@@ -23,6 +25,11 @@ from sac.mpi import (
     proc_id,
     num_procs,
 )
+
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 def eval_pi_loss(
@@ -141,15 +148,26 @@ class SAC(object):
 
         return loss_pi
 
-    def save_model(self, actor, critic, pi_opt, q_opt, epoch):
+    def save_model(
+        self,
+        actor: Actor,
+        critic: DoubleCritic,
+        pi_opt: optim.Optimizer,
+        q_opt: optim.Optimizer,
+        normalizer: StateNormalizer,
+        epoch: int,
+    ):
         mlflow.pytorch.log_model(actor, "actor")
         mlflow.pytorch.log_model(critic, "critic")
 
+        auxiliaries_path = "auxiliaries"
         mlflow.pytorch.log_state_dict({
             "pi_opt": pi_opt.state_dict(),
             "q_opt": q_opt.state_dict(),
             "epoch": epoch,
-        }, "auxiliaries.pth")
+        }, artifact_path=auxiliaries_path)
+
+        normalizer.save_state(auxiliaries_path)
 
     def train(
         self,
@@ -168,7 +186,8 @@ class SAC(object):
         update_after: int,
         update_every: int,
         save_every: int,
-        render: bool = True
+        normalizer: StateNormalizer,
+        render: bool = True,
     ):
         target_critic = deepcopy(critic)
         for p in target_critic.parameters():
@@ -201,6 +220,7 @@ class SAC(object):
         np.random.seed(seed)
 
         state = env.reset()
+        state = normalizer.normalize_state(state)
 
         step = 0
         ep_ret = 0
@@ -229,6 +249,7 @@ class SAC(object):
                         action = action.cpu().detach().numpy()
 
                 next_state, reward, done, _ = env.step(action)
+                next_state = normalizer.normalize_state(state)
 
                 # Bypass max episode length limitation of gym
                 done = False if ep_len == max_ep_len else done
@@ -284,7 +305,7 @@ class SAC(object):
             pbar.set_postfix(metrics)
             if proc_id() == 0:
                 if e % save_every == 0:
-                    self.save_model(actor, critic, pi_opt, q_opt, e)
+                    self.save_model(actor, critic, pi_opt, q_opt, normalizer, e)
 
                 # End of epoch
                 mlflow.log_metrics(metrics, e)
@@ -302,6 +323,7 @@ class SAC(object):
 def parse_arguments() -> Namespace:
     parser = ArgumentParser("Soft Actor-Critic trainer for MuJoCo.")
     parser.add_argument("--run", type=str, default=None, help="Path to pre-existing mlflow run")
+    parser.add_argument("--normalize", action="store_true", help="Apply mean variance normalization.")
 
     args = parser.parse_args()
     return args
@@ -309,10 +331,9 @@ def parse_arguments() -> Namespace:
 
 def main():
     args = parse_arguments()
-    env = gym.make("Humanoid-v3")
-    env._max_episode_steps = 10000
+    env = gym.make("HalfCheetah-v2")
 
-    cpus = 4
+    cpus = 1
     mpi_fork(cpus)
 
     run_id = args.run
@@ -323,7 +344,7 @@ def main():
         actor = mlflow.pytorch.load_model(artifacts_path.joinpath("actor"))
         critic = mlflow.pytorch.load_model(artifacts_path.joinpath("critic"))
 
-        auxiliaries = mlflow.pytorch.load_state_dict(artifacts_path.joinpath("auxiliaries.pth"))
+        auxiliaries = mlflow.pytorch.load_state_dict(artifacts_path.joinpath("auxiliaries"))
         pi_opt = optim.Adam(actor.parameters())
         pi_opt.load_state_dict(auxiliaries["pi_opt"])
 
@@ -331,8 +352,18 @@ def main():
         q_opt.load_state_dict(auxiliaries["q_opt"])
 
         start_epoch = auxiliaries["epoch"]
+
+        try:
+            normalizer = WelfordVarianceEstimate(
+                auxiliaries["welford_mean"],
+                auxiliaries["welford_variance"],
+                auxiliaries["welford_step"],
+            )
+        except KeyError:
+            logger.warning("Normalization values not found in saved file")
+            logger.warning("Continuing without normalization.")
+            normalizer = Identity()
     else:
-        start_epoch = 0
         act_dim = env.action_space.shape[0]
         obs_dim = env.observation_space.shape[0]
         act_limit = env.action_space.high[0]
@@ -342,9 +373,15 @@ def main():
         critic = DoubleCritic(obs_dim, act_dim, hidden_sizes)
 
         learning_rate = 3e-4
-
         pi_opt = optim.Adam(actor.parameters(), lr=learning_rate)
         q_opt = optim.Adam(critic.parameters(), lr=learning_rate)
+
+        start_epoch = 0
+
+        if args.normalize:
+            normalizer = WelfordVarianceEstimate()
+        else:
+            normalizer = Identity()
 
     buffer_size = int(1e6)
     buffer = ReplayBuffer(
@@ -357,7 +394,7 @@ def main():
         alpha=0.2,
         gamma=0.99,
         polyak=0.995,
-        reward_scale=10.,
+        reward_scale=5.,
     )
 
     # Start run only if process id 0
@@ -370,20 +407,21 @@ def main():
         sac.train(
             start_epoch=start_epoch,
             epochs=1000,
-            batch_size=500,
+            batch_size=64,
             steps_per_epoch=2000,
             start_steps=10000,
-            update_after=1000,
+            update_after=10000,
             update_every=50,
             max_ep_len=5000,
             save_every=10,
-            render=True,
             buffer=buffer,
             env=env,
             actor=actor,
             critic=critic,
             pi_opt=pi_opt,
             q_opt=q_opt,
+            normalizer=normalizer,
+            render=True,
         )
 
 

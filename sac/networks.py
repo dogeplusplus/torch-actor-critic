@@ -48,8 +48,8 @@ class Actor(nn.Module):
         log_std = self.log_std_layer(x)
         log_std = torch.clip(log_std, self.log_min_std, self.log_max_std)
         std = torch.exp(log_std)
-
         pi_distribution = Normal(mu, std)
+
         prob = mu
         if not deterministic:
             prob = pi_distribution.rsample()
@@ -57,7 +57,7 @@ class Actor(nn.Module):
         logprob = None
         if with_logprob:
             logprob = pi_distribution.log_prob(prob).sum(dim=-1)
-            logprob -= (2 * torch.tensor(np.log(2)) - prob - softplus(-2*prob)).sum(dim=-1)
+            logprob -= (2 * torch.as_tensor(np.log(2)) - prob - softplus(-2*prob)).sum(dim=-1)
 
         pi_action = torch.tanh(prob) * self.act_limit
 
