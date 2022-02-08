@@ -12,6 +12,7 @@ from pathlib import Path
 from copy import deepcopy
 from torch import FloatTensor
 from contextlib import nullcontext
+from gym.wrappers import RescaleAction
 from argparse import ArgumentParser, Namespace
 
 from sac.buffer import ReplayBuffer, Batch
@@ -331,7 +332,8 @@ def parse_arguments() -> Namespace:
 
 def main():
     args = parse_arguments()
-    env = gym.make("HalfCheetah-v2")
+    env = gym.make("Humanoid-v3")
+    env = RescaleAction(env, -1, 1)
 
     cpus = 1
     mpi_fork(cpus)
