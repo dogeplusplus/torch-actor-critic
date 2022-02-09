@@ -43,9 +43,6 @@ class ReplayBuffer:
         self.size = min(self.size + 1, self.max_size)
 
     def sample(self, batch_size) -> Batch:
-        assert self.ptr >= batch_size, "Number of samples less than batch size."
-        assert self.ptr <= self.size, "Number of samples must be at most buffer size."
-
         idx = sample(range(self.size), batch_size)
 
         return Batch(
