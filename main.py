@@ -12,7 +12,6 @@ from pathlib import Path
 from copy import deepcopy
 from torch import FloatTensor
 from contextlib import nullcontext
-from gym.wrappers import RescaleAction
 from argparse import ArgumentParser, Namespace
 
 from sac.buffer import ReplayBuffer, Batch
@@ -325,6 +324,7 @@ def parse_arguments() -> Namespace:
     parser = ArgumentParser("Soft Actor-Critic trainer for MuJoCo.")
     parser.add_argument("--run", type=str, default=None, help="Path to pre-existing mlflow run")
     parser.add_argument("--normalize", action="store_true", help="Apply mean variance normalization.")
+    parser.add_argument("--experiment", default="Default", help="Mlflow experiment name")
 
     args = parser.parse_args()
     return args
@@ -333,12 +333,13 @@ def parse_arguments() -> Namespace:
 def main():
     args = parse_arguments()
     env = gym.make("Humanoid-v3")
-    env = RescaleAction(env, -1, 1)
 
+    torch.set_num_threads(4)
     cpus = 1
     mpi_fork(cpus)
 
     run_id = args.run
+    mlflow.set_experiment(args.experiment)
 
     if run_id is not None:
         artifacts_path = Path("mlruns", "0", run_id, "artifacts")
@@ -396,7 +397,7 @@ def main():
         alpha=0.2,
         gamma=0.99,
         polyak=0.995,
-        reward_scale=5.,
+        reward_scale=1.,
     )
 
     # Start run only if process id 0
@@ -409,12 +410,12 @@ def main():
         sac.train(
             start_epoch=start_epoch,
             epochs=1000,
-            batch_size=64,
-            steps_per_epoch=2000,
+            batch_size=500,
+            steps_per_epoch=5000,
             start_steps=10000,
             update_after=10000,
             update_every=50,
-            max_ep_len=5000,
+            max_ep_len=1000,
             save_every=10,
             buffer=buffer,
             env=env,
@@ -423,7 +424,7 @@ def main():
             pi_opt=pi_opt,
             q_opt=q_opt,
             normalizer=normalizer,
-            render=True,
+            render=False,
         )
 
 
