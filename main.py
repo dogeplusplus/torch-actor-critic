@@ -251,7 +251,7 @@ class SAC(object):
                         action = action.cpu().detach().numpy()
 
                 next_state, reward, done, _ = env.step(action)
-                next_state = normalizer.normalize_state(state)
+                next_state = normalizer.normalize_state(next_state)
 
                 # Bypass max episode length limitation of gym
                 done = False if ep_len == max_ep_len else done
@@ -370,7 +370,6 @@ def main():
             logger.warning("Continuing without normalization.")
             normalizer = Identity()
     else:
-        mlflow.log_param("environment", environment)
         act_dim = env.action_space.shape[0]
         obs_dim = env.observation_space.shape[0]
         act_limit = env.action_space.high[0]
@@ -407,6 +406,7 @@ def main():
     # Start run only if process id 0
     if proc_id() == 0:
         context = mlflow.start_run(run_id)
+        mlflow.log_param("environment", environment)
     else:
         context = nullcontext()
 
@@ -428,7 +428,7 @@ def main():
             pi_opt=pi_opt,
             q_opt=q_opt,
             normalizer=normalizer,
-            render=False,
+            render=True,
         )
 
 
