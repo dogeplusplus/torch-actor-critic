@@ -7,8 +7,10 @@ import numpy as np
 import torch.nn as nn
 import torch.optim as optim
 
+
 from mpi4py import MPI
 from pathlib import Path
+from typing import Tuple
 from copy import deepcopy
 from torch import FloatTensor
 from contextlib import nullcontext
@@ -105,7 +107,7 @@ class SAC(object):
         critic: DoubleCritic,
         target_critic: DoubleCritic,
         samples: Batch
-    ) -> FloatTensor:
+    ) -> Tuple[DoubleCritic, FloatTensor]:
         q_opt.zero_grad()
         loss_q = eval_q_loss(
             actor,
@@ -124,9 +126,9 @@ class SAC(object):
         mpi_avg_grads(critic)
         q_opt.step()
 
-        return loss_q
+        return critic, loss_q
 
-    def update_policy(self, pi_opt: optim.Optimizer, actor: Actor, critic: DoubleCritic, samples: Batch) -> FloatTensor:
+    def update_policy(self, pi_opt: optim.Optimizer, actor: Actor, critic: DoubleCritic, samples: Batch) -> Tuple[Actor, FloatTensor]:
 
         for p in critic.parameters():
             p.requires_grad = False
@@ -146,7 +148,7 @@ class SAC(object):
         for p in critic.parameters():
             p.requires_grad = True
 
-        return loss_pi
+        return actor, loss_pi
 
     def save_model(
         self,
@@ -287,8 +289,8 @@ class SAC(object):
                 if step > update_after and step % update_every == 0:
                     for _ in range(update_every):
                         samples = buffer.sample(batch_size)
-                        loss_q = self.update_critic(q_opt, actor, critic, target_critic, samples)
-                        loss_pi = self.update_policy(pi_opt, actor, critic, samples)
+                        critic, loss_q = self.update_critic(q_opt, actor, critic, target_critic, samples)
+                        actor, loss_pi = self.update_policy(pi_opt, actor, critic, samples)
                         update_targets(critic, target_critic, self.polyak)
 
                         losses_pi.append(loss_pi.cpu().detach().numpy())
@@ -332,7 +334,8 @@ def parse_arguments() -> Namespace:
 
 def main():
     args = parse_arguments()
-    env = gym.make("Humanoid-v3")
+    environment = "Humanoid-v2"
+    env = gym.make(environment)
 
     torch.set_num_threads(4)
     cpus = 1
@@ -367,6 +370,7 @@ def main():
             logger.warning("Continuing without normalization.")
             normalizer = Identity()
     else:
+        mlflow.log_param("environment", environment)
         act_dim = env.action_space.shape[0]
         obs_dim = env.observation_space.shape[0]
         act_limit = env.action_space.high[0]
@@ -415,7 +419,7 @@ def main():
             start_steps=10000,
             update_after=10000,
             update_every=50,
-            max_ep_len=1000,
+            max_ep_len=5000,
             save_every=10,
             buffer=buffer,
             env=env,
