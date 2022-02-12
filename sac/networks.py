@@ -15,11 +15,6 @@ def mlp(neurons: List[int]) -> nn.ModuleList:
     return layers
 
 
-def softplus(x, beta: float = 1, threshold: float = 20) -> FloatTensor:
-    softp = 1.0 / beta * torch.log(1 + torch.exp(beta * x))
-    return torch.where(beta * x > threshold, x, softp)
-
-
 class Actor(nn.Module):
     def __init__(
         self,
@@ -53,13 +48,12 @@ class Actor(nn.Module):
         prob = mu
         if not deterministic:
             prob = pi_distribution.rsample()
+        pi_action = torch.tanh(prob) * self.act_limit
 
         logprob = None
         if with_logprob:
             logprob = pi_distribution.log_prob(prob).sum(dim=-1)
-            logprob -= (2 * torch.as_tensor(np.log(2)) - prob - softplus(-2*prob)).sum(dim=-1)
-
-        pi_action = torch.tanh(prob) * self.act_limit
+            logprob -= (2 * torch.as_tensor(np.log(2)) - prob - F.softplus(-2*prob)).sum(dim=-1)
 
         return (pi_action, logprob)
 
