@@ -59,11 +59,14 @@ def main():
     env = gym.make("Humanoid-v2")
     artifact_path = Path("mlruns", "0", args.run, "artifacts")
     auxiliaries_path = artifact_path / "auxiliaries" / "state_dict.pth"
-    auxiliaries = torch.load(auxiliaries_path)
 
     try:
+        auxiliaries = torch.load(auxiliaries_path)
         normalizer = WelfordVarianceEstimate()
         normalizer.load_state(auxiliaries)
+    except FileNotFoundError:
+        logger.error(f"Could not find auxiliaries: {auxiliaries_path}. No normalization will be applied")
+        normalizer = Identity()
     except KeyError as e:
         logging.info(f"Welford parameter {str(e)} not detected. No normalization will be applied")
         normalizer = Identity()
