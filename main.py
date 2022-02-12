@@ -10,7 +10,6 @@ import torch.optim as optim
 
 from mpi4py import MPI
 from pathlib import Path
-from typing import Tuple
 from copy import deepcopy
 from torch import FloatTensor
 from contextlib import nullcontext
@@ -107,7 +106,7 @@ class SAC(object):
         critic: DoubleCritic,
         target_critic: DoubleCritic,
         samples: Batch
-    ) -> Tuple[DoubleCritic, FloatTensor]:
+    ) -> FloatTensor:
         q_opt.zero_grad()
         loss_q = eval_q_loss(
             actor,
@@ -126,10 +125,9 @@ class SAC(object):
         mpi_avg_grads(critic)
         q_opt.step()
 
-        return critic, loss_q
+        return loss_q
 
-    def update_policy(self, pi_opt: optim.Optimizer, actor: Actor, critic: DoubleCritic, samples: Batch) -> Tuple[Actor, FloatTensor]:
-
+    def update_policy(self, pi_opt: optim.Optimizer, actor: Actor, critic: DoubleCritic, samples: Batch) -> FloatTensor:
         for p in critic.parameters():
             p.requires_grad = False
 
@@ -148,7 +146,7 @@ class SAC(object):
         for p in critic.parameters():
             p.requires_grad = True
 
-        return actor, loss_pi
+        return loss_pi
 
     def save_model(
         self,
@@ -190,6 +188,7 @@ class SAC(object):
         save_every: int,
         normalizer: StateNormalizer,
         render: bool = True,
+        logging: bool = True,
     ):
         target_critic = deepcopy(critic)
         for p in target_critic.parameters():
@@ -200,7 +199,7 @@ class SAC(object):
         sync_params(target_critic)
 
         # Log parameters in mlflow run
-        if proc_id() == 0:
+        if proc_id() == 0 and logging:
             parameters = dict(
                 alpha=self.alpha,
                 gamma=self.gamma,
@@ -289,8 +288,8 @@ class SAC(object):
                 if step > update_after and step % update_every == 0:
                     for _ in range(update_every):
                         samples = buffer.sample(batch_size)
-                        critic, loss_q = self.update_critic(q_opt, actor, critic, target_critic, samples)
-                        actor, loss_pi = self.update_policy(pi_opt, actor, critic, samples)
+                        loss_q = self.update_critic(q_opt, actor, critic, target_critic, samples)
+                        loss_pi = self.update_policy(pi_opt, actor, critic, samples)
                         update_targets(critic, target_critic, self.polyak)
 
                         losses_pi.append(loss_pi.cpu().detach().numpy())
@@ -305,7 +304,7 @@ class SAC(object):
                 "loss_pi": np.mean(losses_pi),
             }
             pbar.set_postfix(metrics)
-            if proc_id() == 0:
+            if proc_id() == 0 and logging:
                 if e % save_every == 0:
                     self.save_model(actor, critic, pi_opt, q_opt, normalizer, e)
 
@@ -327,6 +326,10 @@ def parse_arguments() -> Namespace:
     parser.add_argument("--run", type=str, default=None, help="Path to pre-existing mlflow run")
     parser.add_argument("--normalize", action="store_true", help="Apply mean variance normalization.")
     parser.add_argument("--experiment", default="Default", help="Mlflow experiment name")
+    parser.add_argument("--disable-logging", dest="logging", action="store_false", help="Turn off logging")
+    parser.add_argument("--render", dest="render", action="store_true", help="Enable environment rendering")
+    parser.set_defaults(logging=True)
+    parser.set_defaults(render=False)
 
     args = parser.parse_args()
     return args
@@ -400,11 +403,11 @@ def main():
         alpha=0.2,
         gamma=0.99,
         polyak=0.995,
-        reward_scale=1.,
+        reward_scale=10.,
     )
 
     # Start run only if process id 0
-    if proc_id() == 0:
+    if proc_id() == 0 and args.logging:
         context = mlflow.start_run(run_id)
         mlflow.log_param("environment", environment)
     else:
@@ -428,7 +431,8 @@ def main():
             pi_opt=pi_opt,
             q_opt=q_opt,
             normalizer=normalizer,
-            render=True,
+            render=args.render,
+            logging=args.logging,
         )
 
 

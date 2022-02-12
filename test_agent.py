@@ -56,7 +56,7 @@ def parse_arguments() -> Namespace:
 
 def main():
     args = parse_arguments()
-    env = gym.make("HalfCheetah-v2")
+    env = gym.make("Humanoid-v2")
     artifact_path = Path("mlruns", "0", args.run, "artifacts")
     auxiliaries_path = artifact_path / "auxiliaries" / "state_dict.pth"
     auxiliaries = torch.load(auxiliaries_path)
