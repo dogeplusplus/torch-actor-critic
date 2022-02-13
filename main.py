@@ -64,14 +64,15 @@ def eval_q_loss(
     reward_scale: float,
 ) -> torch.FloatTensor:
 
-    a2, logp_ac = actor(next_states)
-    sa2 = torch.cat([next_states, a2], dim=-1)
-    q1_target, q2_target = target_critic(sa2)
-    q_target = torch.min(q1_target, q2_target)
+    with torch.no_grad():
+        a2, logp_ac = actor(next_states)
+        sa2 = torch.cat([next_states, a2], dim=-1)
+        q1_target, q2_target = target_critic(sa2)
+        q_target = torch.min(q1_target, q2_target)
 
-    backup = reward_scale * rewards + gamma * (1 - done) * (
-        q_target - alpha * logp_ac
-    )
+        backup = reward_scale * rewards + gamma * (1 - done) * (
+            q_target - alpha * logp_ac
+        )
 
     sa = torch.cat([states, actions], dim=-1)
     q1, q2 = critic(sa)
@@ -339,8 +340,9 @@ def main():
     args = parse_arguments()
     environment = "Humanoid-v2"
     env = gym.make(environment)
+    env._max_episode_steps = 5000
 
-    torch.set_num_threads(4)
+    torch.set_num_threads(2)
     cpus = 1
     mpi_fork(cpus)
 
@@ -417,7 +419,7 @@ def main():
         sac.train(
             start_epoch=start_epoch,
             epochs=1000,
-            batch_size=500,
+            batch_size=256,
             steps_per_epoch=5000,
             start_steps=10000,
             update_after=10000,
