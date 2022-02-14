@@ -1,3 +1,4 @@
+dm-control==0.0.425341097
 gym[all]
 mlflow
 mujoco-py==2.1.2.14
