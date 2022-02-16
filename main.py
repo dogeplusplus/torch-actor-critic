@@ -15,8 +15,8 @@ from torch import FloatTensor
 from contextlib import nullcontext
 from argparse import ArgumentParser, Namespace
 
-from sac.buffer import ReplayBuffer, Batch
-from sac.networks import Actor, DoubleCritic
+from buffer.replay_buffer import ReplayBuffer, Batch
+from networks.linear import Actor, DoubleCritic
 from sac.utils import WelfordVarianceEstimate, StateNormalizer, Identity
 from sac.mpi import (
     mpi_avg_grads,

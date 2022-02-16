@@ -1,18 +1,13 @@
 import torch
 import numpy as np
+import typing as t
 import torch.nn as nn
 import torch.nn.functional as F
 
 from torch import FloatTensor
-from typing import List, Tuple
 from torch.distributions.normal import Normal
 
-
-def mlp(neurons: List[int]) -> nn.ModuleList:
-    layers = nn.ModuleList([
-        nn.Linear(x, y) for x, y in zip(neurons[:-1], neurons[1:])
-    ])
-    return layers
+from networks.core import mlp
 
 
 class Actor(nn.Module):
@@ -20,7 +15,7 @@ class Actor(nn.Module):
         self,
         obs_dim: int,
         act_dim: int,
-        hidden_sizes: List[int],
+        hidden_sizes: t.List[int],
         log_min_std: float = -20,
         log_max_std: float = 2,
         act_limit: float = 10
@@ -59,7 +54,7 @@ class Actor(nn.Module):
 
 
 class Critic(nn.Module):
-    def __init__(self, obs_dim: int, act_dim: int, hidden_sizes: List[int]):
+    def __init__(self, obs_dim: int, act_dim: int, hidden_sizes: t.List[int]):
         super(Critic, self).__init__()
         self.layers = mlp([obs_dim + act_dim] + hidden_sizes + [1])
 
@@ -74,10 +69,10 @@ class Critic(nn.Module):
 
 
 class DoubleCritic(nn.Module):
-    def __init__(self, obs_dim: int, act_dim: int, hidden_sizes: List[int]):
+    def __init__(self, obs_dim: int, act_dim: int, hidden_sizes: t.List[int]):
         super(DoubleCritic, self).__init__()
         self.q1 = Critic(obs_dim, act_dim, hidden_sizes)
         self.q2 = Critic(obs_dim, act_dim, hidden_sizes)
 
-    def forward(self, x: FloatTensor) -> Tuple[FloatTensor, FloatTensor]:
+    def forward(self, x: FloatTensor) -> t.Tuple[FloatTensor, FloatTensor]:
         return self.q1(x), self.q2(x)

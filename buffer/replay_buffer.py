@@ -1,8 +1,8 @@
 import numpy as np
 
 from random import sample
-from dataclasses import dataclass
 from torch import FloatTensor
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
