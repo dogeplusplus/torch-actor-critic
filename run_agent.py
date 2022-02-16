@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
-def test_agent(
+def run_agent(
     actor: nn.Module,
     env: gym.Env,
     episodes: int,
@@ -75,7 +75,7 @@ def main():
     actor = mlflow.pytorch.load_model(actor_path)
     actor.eval()
 
-    test_agent(actor, env, args.episodes, normalizer, args.deterministic, args.render)
+    run_agent(actor, env, args.episodes, normalizer, args.deterministic, args.render)
 
 
 if __name__ == "__main__":
