@@ -329,6 +329,7 @@ def parse_arguments() -> Namespace:
     parser.add_argument("--experiment", default="Default", help="Mlflow experiment name")
     parser.add_argument("--disable-logging", dest="logging", action="store_false", help="Turn off logging")
     parser.add_argument("--render", dest="render", action="store_true", help="Enable environment rendering")
+    parser.add_argument("--environment", default="Humanoid-v2", help="Environment to use")
     parser.set_defaults(logging=True)
     parser.set_defaults(render=False)
 
@@ -338,7 +339,7 @@ def parse_arguments() -> Namespace:
 
 def main():
     args = parse_arguments()
-    environment = "Humanoid-v2"
+    environment = args.environment
     env = gym.make(environment)
     env._max_episode_steps = 5000
 
@@ -419,7 +420,7 @@ def main():
         sac.train(
             start_epoch=start_epoch,
             epochs=1000,
-            batch_size=256,
+            batch_size=64,
             steps_per_epoch=5000,
             start_steps=10000,
             update_after=10000,
