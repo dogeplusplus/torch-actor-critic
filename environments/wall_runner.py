@@ -1,7 +1,15 @@
 import gym
 import numpy as np
+import typing as t
 
+from dataclasses import dataclass
 from dm_control.locomotion.examples import basic_cmu_2019
+
+
+@dataclass
+class MultiObservation:
+    features: np.ndarray
+    camera: np.ndarray
 
 
 class DeepMindWallRunner(gym.Env):
@@ -10,21 +18,20 @@ class DeepMindWallRunner(gym.Env):
 
     def reset(self):
         time_step = self.env.reset()
-        observation = self.flatten_observations(time_step.observation)
+        observation = self.process_observations(time_step.observation)
 
         return observation
 
-    def step(self, action):
+    def step(self, action: np.ndarray):
         time_step = self.env.step(action)
 
         done = time_step.last()
-        reward = time_step.reward()
-        observation = self.flatten_observations(time_step.observation)
+        reward = time_step.reward
+        observation = self.process_observations(time_step.observation)
 
         return observation, reward, done, None
 
-    def flatten_observations(self, obs):
-        # TODO: decide what to do with the camera information
+    def process_observations(self, obs: t.List[np.ndarray]):
         filtered_obs = [
             obs["walker/appendages_pos"],
             obs["walker/body_height"][np.newaxis, ...],
@@ -40,7 +47,10 @@ class DeepMindWallRunner(gym.Env):
             obs["walker/world_zaxis"],
         ]
 
-        return np.concatenate(filtered_obs)
+        return MultiObservation(
+            np.concatenate(filtered_obs),
+            obs["walker/egocentric_camera"],
+        )
 
     def render(self):
         pass

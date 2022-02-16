@@ -4,7 +4,7 @@ DVC_REMOTE := ${GDRIVE_FOLDER}/${REPO_NAME}
 
 .PHONY:test
 test:
-	pytest
+	python -m pytest
 
 .PHONY:install-hooks
 install-hooks:
