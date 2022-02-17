@@ -2,14 +2,15 @@ import gym
 import numpy as np
 import typing as t
 
+from torch import FloatTensor
 from dataclasses import dataclass
 from dm_control.locomotion.examples import basic_cmu_2019
 
 
 @dataclass
 class MultiObservation:
-    features: np.ndarray
-    camera: np.ndarray
+    features: FloatTensor
+    camera: FloatTensor
 
 
 class DeepMindWallRunner(gym.Env):
@@ -32,7 +33,7 @@ class DeepMindWallRunner(gym.Env):
         return observation, reward, done, None
 
     def process_observations(self, obs: t.List[np.ndarray]):
-        filtered_obs = [
+        features = np.concatenate([
             obs["walker/appendages_pos"],
             obs["walker/body_height"][np.newaxis, ...],
             obs["walker/end_effectors_pos"],
@@ -45,11 +46,13 @@ class DeepMindWallRunner(gym.Env):
             obs["walker/sensors_touch"],
             obs["walker/sensors_velocimeter"],
             obs["walker/world_zaxis"],
-        ]
+        ])
+
+        camera = np.rollaxis(obs["walker/egocentric_camera"], -1)
 
         return MultiObservation(
-            np.concatenate(filtered_obs),
-            obs["walker/egocentric_camera"],
+            FloatTensor(features),
+            FloatTensor(camera),
         )
 
     def render(self):

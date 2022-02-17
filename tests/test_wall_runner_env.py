@@ -13,8 +13,8 @@ def environment():
 def test_reset(environment):
     state = environment.reset()
 
-    assert state.features.size == 168
-    assert state.camera.shape == (64, 64, 3)
+    assert len(state.features) == 168
+    assert state.camera.size() == (3, 64, 64)
 
 
 def test_step(environment):
@@ -22,8 +22,8 @@ def test_step(environment):
     action = np.random.random((56,))
     state, reward, done, _ = environment.step(action)
 
-    assert state.features.size == 168
-    assert state.camera.shape == (64, 64, 3)
+    assert len(state.features) == 168
+    assert state.camera.size() == (3, 64, 64)
 
     assert isinstance(reward, float)
     assert isinstance(done, bool)
