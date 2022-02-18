@@ -34,8 +34,8 @@ logger.setLevel(logging.INFO)
 
 
 def eval_pi_loss(
-    actor: Actor,
-    critic: DoubleCritic,
+    actor: nn.Module,
+    critic: nn.Module,
     state: FloatTensor,
     next_state: FloatTensor,
     alpha: float
@@ -51,9 +51,9 @@ def eval_pi_loss(
 
 
 def eval_q_loss(
-    actor: Actor,
-    critic: DoubleCritic,
-    target_critic: DoubleCritic,
+    actor: nn.Module,
+    critic: nn.Module,
+    target_critic: nn.Module,
     states: FloatTensor,
     actions: FloatTensor,
     rewards: FloatTensor,
@@ -103,9 +103,9 @@ class SAC(object):
     def update_critic(
         self,
         q_opt: optim.Optimizer,
-        actor: Actor,
-        critic: DoubleCritic,
-        target_critic: DoubleCritic,
+        actor: nn.Module,
+        critic: nn.Module,
+        target_critic: nn.Module,
         samples: Batch
     ) -> FloatTensor:
         q_opt.zero_grad()
@@ -128,7 +128,7 @@ class SAC(object):
 
         return loss_q
 
-    def update_policy(self, pi_opt: optim.Optimizer, actor: Actor, critic: DoubleCritic, samples: Batch) -> FloatTensor:
+    def update_policy(self, pi_opt: optim.Optimizer, actor: nn.Module, critic: nn.Module, samples: Batch) -> FloatTensor:
         for p in critic.parameters():
             p.requires_grad = False
 
@@ -151,8 +151,8 @@ class SAC(object):
 
     def save_model(
         self,
-        actor: Actor,
-        critic: DoubleCritic,
+        actor: nn.Module,
+        critic: nn.Module,
         pi_opt: optim.Optimizer,
         q_opt: optim.Optimizer,
         normalizer: StateNormalizer,
@@ -179,8 +179,8 @@ class SAC(object):
         steps_per_epoch: int,
         max_ep_len: int,
         env: gym.Env,
-        actor: Actor,
-        critic: DoubleCritic,
+        actor: nn.Module,
+        critic: nn.Module,
         buffer: ReplayBuffer,
         pi_opt: optim.Optimizer,
         q_opt: optim.Optimizer,
@@ -242,7 +242,6 @@ class SAC(object):
             losses_q = []
 
             for t in range(steps_per_epoch):
-
                 if step < start_steps:
                     action = env.action_space.sample()
                 else:
@@ -344,7 +343,7 @@ def main():
     env._max_episode_steps = 5000
 
     torch.set_num_threads(2)
-    cpus = 1
+    cpus = 4
     mpi_fork(cpus)
 
     run_id = args.run
