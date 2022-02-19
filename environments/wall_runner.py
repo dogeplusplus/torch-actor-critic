@@ -2,6 +2,7 @@ import gym
 import numpy as np
 import typing as t
 
+from gym.spaces import Box
 from torch import FloatTensor
 from dataclasses import dataclass
 from dm_control.locomotion.examples import basic_cmu_2019
@@ -16,6 +17,8 @@ class MultiObservation:
 class DeepMindWallRunner(gym.Env):
     def __init__(self):
         self.env = basic_cmu_2019.cmu_humanoid_run_walls()
+        self.action_space = Box(-1, 1, (56,))
+        self.observation_space = Box(-1, 1, (168,))
 
     def reset(self):
         time_step = self.env.reset()
