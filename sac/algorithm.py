@@ -287,9 +287,7 @@ class SAC(object):
                 "reward": np.mean(episode_rewards),
                 "loss_q": np.mean(losses_q),
                 "loss_pi": np.mean(losses_pi),
-                "step": step,
             }
-            pbar.set_postfix(metrics)
             if proc_id() == 0 and logging:
                 if e % self.save_every == 0:
                     self.save_model(actor, critic, pi_opt, q_opt, e)
@@ -297,6 +295,8 @@ class SAC(object):
                 # End of epoch
                 mlflow.log_metrics(metrics, e)
 
+            metrics["step"] = step
+            pbar.set_postfix(metrics)
             episode_lengths = []
             episode_rewards = []
             losses_pi = []
