@@ -2,15 +2,14 @@ import gym
 import torch
 import mlflow
 import logging
-import typing as t
-import torch.nn as nn
 import torch.optim as optim
-
 
 from pathlib import Path
 from contextlib import nullcontext
+from mlflow.tracking import MlflowClient
 from argparse import ArgumentParser, Namespace
 
+from sac.algorithm import SAC
 from buffer.replay_buffer import ReplayBuffer
 from buffer.visual_replay_buffer import VisualReplayBuffer
 from networks.linear import Actor, DoubleCritic
@@ -20,19 +19,95 @@ from sac.mpi import (
     proc_id,
 )
 
-from sac.algorithm import SAC
-
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
-def agent_configuration(environment: str) -> t.Tuple[nn.Module, nn.Module, t.Any]:
+def load_session(run_id):
+    client = MlflowClient()
+    run = client.get_run(run_id)
+    sac_params = run.data.params
+
+    artifacts_path = Path("mlruns", "0", run_id, "artifacts")
+    actor = mlflow.pytorch.load_model(artifacts_path / "actor")
+    critic = mlflow.pytorch.load_model(artifacts_path / "critic")
+    auxiliaries = mlflow.pytorch.load_state_dict(artifacts_path / "auxiliaries")
+
+    pi_opt = optim.Adam(actor.parameters())
+    pi_opt.load_state_dict(auxiliaries["pi_opt"])
+
+    q_opt = optim.Adam(critic.parameters())
+    q_opt.load_state_dict(auxiliaries["q_opt"])
+    start_epoch = auxiliaries["epoch"]
+
+    # Remove environment as not needed in the constructor
+    sac_params.pop("environment", None)
+    sac_params = {
+        k: int(float(v)) if float(v).is_integer() else float(v) for k,
+        v in sac_params.items()
+    }
+    return actor, critic, pi_opt, q_opt, start_epoch, sac_params
+
+
+def init_session(environment: str):
+    env = gym.make(environment)
+
+    act_dim = env.action_space.shape[0]
+    obs_dim = env.observation_space.shape[0]
+    act_limit = env.action_space.high[0]
+
+    hidden_sizes = [256, 256]
+
     if environment == "DeepMindWallRunner-v0":
-        return (VisualActor, VisualDoubleCritic, VisualReplayBuffer)
+        # Extra parameters needed for convolutional policy/critic
+        filters = [32, 64, 64]
+        kernel_sizes = [8, 4, 3]
+        strides = [4, 2, 1]
+        vis_dim = (3, 64, 64)
+        actor = VisualActor(
+            obs_dim,
+            act_dim,
+            vis_dim,
+            hidden_sizes,
+            act_limit,
+            filters,
+            kernel_sizes,
+            strides,
+        )
+        critic = VisualDoubleCritic(
+            obs_dim,
+            act_dim,
+            vis_dim,
+            hidden_sizes,
+            filters,
+            kernel_sizes,
+            strides,
+        )
     else:
-        return (Actor, DoubleCritic, ReplayBuffer)
+        actor = Actor(obs_dim, act_dim, hidden_sizes, act_limit=act_limit)
+        critic = DoubleCritic(obs_dim, act_dim, hidden_sizes)
+
+    start_epoch = 0
+    learning_rate = 3e-4
+    pi_opt = optim.Adam(actor.parameters(), lr=learning_rate)
+    q_opt = optim.Adam(critic.parameters(), lr=learning_rate)
+
+    return actor, critic, pi_opt, q_opt, start_epoch
+
+
+def init_buffer(environment: str, size: int) -> ReplayBuffer:
+    env = gym.make(environment)
+    obs_dim = env.observation_space.shape[0]
+    act_dim = env.action_space.shape[0]
+
+    if environment == "DeepMindWallRunner-v0":
+        buffer = VisualReplayBuffer(size, act_dim)
+    else:
+        buffer = ReplayBuffer(size, obs_dim, act_dim)
+
+    return buffer
 
 
 def parse_arguments() -> Namespace:
@@ -52,78 +127,49 @@ def parse_arguments() -> Namespace:
 
 def main():
     args = parse_arguments()
-    environment = args.environment
-    env = gym.make(environment)
-    env._max_episode_steps = 5000
-
     torch.set_num_threads(2)
-    mpi_fork(args.cpus)
-
     run_id = args.run
     mlflow.set_experiment(args.experiment)
-
-    if run_id is not None:
-        artifacts_path = Path("mlruns", "0", run_id, "artifacts")
-        actor = mlflow.pytorch.load_model(artifacts_path / "actor")
-        critic = mlflow.pytorch.load_model(artifacts_path / "critic")
-        auxiliaries = mlflow.pytorch.load_state_dict(artifacts_path / "auxiliaries")
-
-        pi_opt = optim.Adam(actor.parameters())
-        pi_opt.load_state_dict(auxiliaries["pi_opt"])
-
-        q_opt = optim.Adam(critic.parameters())
-        q_opt.load_state_dict(auxiliaries["q_opt"])
-
-        start_epoch = auxiliaries["epoch"]
-
-    else:
-        act_dim = env.action_space.shape[0]
-        obs_dim = env.observation_space.shape[0]
-        act_limit = env.action_space.high[0]
-
-        hidden_sizes = [256, 256]
-
-        actor = Actor(obs_dim, act_dim, hidden_sizes, act_limit=act_limit)
-        critic = DoubleCritic(obs_dim, act_dim, hidden_sizes)
-
-        learning_rate = 3e-4
-        pi_opt = optim.Adam(actor.parameters(), lr=learning_rate)
-        q_opt = optim.Adam(critic.parameters(), lr=learning_rate)
-
-        start_epoch = 0
-
-    buffer_size = int(1e6)
-    buffer = ReplayBuffer(
-        buffer_size,
-        env.observation_space.shape[0],
-        env.action_space.shape[0],
-    )
-
-    sac = SAC(
-        alpha=0.2,
-        gamma=0.99,
-        polyak=0.995,
-        reward_scale=10.,
-    )
 
     # Start run only if process id 0
     if proc_id() == 0 and args.logging:
         context = mlflow.start_run(run_id)
-        mlflow.log_param("environment", environment)
     else:
         context = nullcontext()
+
+    buffer_size = int(1e6)
+    buffer = init_buffer(args.environment, buffer_size)
+
+    if run_id is not None:
+        actor, critic, pi_opt, q_opt, start_epoch, params = load_session(run_id)
+    else:
+        actor, critic, pi_opt, q_opt, start_epoch = init_session(args.environment)
+        params = dict(
+            alpha=0.2,
+            gamma=0.99,
+            polyak=0.995,
+            reward_scale=1.,
+            epochs=1000,
+            batch_size=64,
+            steps_per_epoch=5000,
+            start_steps=1000,
+            update_after=1000,
+            update_every=50,
+            max_ep_len=5000,
+            save_every=10,
+        )
+        if proc_id() == 0 and args.logging:
+            mlflow.log_params(params)
+            mlflow.log_param("environment", args.environment)
+            mlflow.log_param("buffer_size", buffer_size)
+
+    sac = SAC(**params)
+    env = gym.make(args.environment)
+    mpi_fork(args.cpus)
 
     with context:
         sac.train(
             start_epoch=start_epoch,
-            epochs=1000,
-            batch_size=64,
-            steps_per_epoch=5000,
-            start_steps=10000,
-            update_after=10000,
-            update_every=50,
-            max_ep_len=5000,
-            save_every=10,
             buffer=buffer,
             env=env,
             actor=actor,

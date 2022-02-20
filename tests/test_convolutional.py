@@ -11,8 +11,8 @@ def test_visual_actor():
     model = VisualActor(obs_dim, act_dim, vis_dim)
 
     features = torch.rand((obs_dim,))
-    camera = torch.rand(vis_dim)
-    x = MultiObservation(features, camera)
+    frame = torch.rand(vis_dim)
+    x = MultiObservation(features, frame)
     pi, log_prob = model(x)
 
     assert list(pi.size()) == [act_dim]
@@ -25,14 +25,18 @@ def test_visual_double_critics():
     vis_dim = (3, 64, 64)
     model = VisualCritic(obs_dim, act_dim, vis_dim)
 
-    state_action = torch.rand((2, obs_dim + act_dim))
-    camera = torch.rand((2,) + vis_dim)
-    x = MultiObservation(state_action, camera)
-    value = model(x)
+    features = torch.rand((2, obs_dim))
+    frame = torch.rand((2,) + vis_dim)
+    action = torch.rand((2, act_dim))
+
+    state = MultiObservation(features, frame)
+    value = model(state, action)
     assert list(value.size()) == [2]
 
-    state_action = torch.rand((obs_dim + act_dim,))
-    camera = torch.rand(vis_dim)
-    x = MultiObservation(state_action, camera)
-    value = model(x)
+    features = torch.rand((obs_dim,))
+    frame = torch.rand(vis_dim)
+    action = torch.rand((act_dim,))
+
+    state = MultiObservation(features, frame)
+    value = model(state, action)
     assert list(value.size()) == [1]

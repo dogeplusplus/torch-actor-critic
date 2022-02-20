@@ -11,7 +11,7 @@ from dm_control.locomotion.examples import basic_cmu_2019
 @dataclass
 class MultiObservation:
     features: FloatTensor
-    camera: FloatTensor
+    frame: FloatTensor
 
 
 class DeepMindWallRunner(gym.Env):
@@ -51,11 +51,11 @@ class DeepMindWallRunner(gym.Env):
             obs["walker/world_zaxis"],
         ])
 
-        camera = np.rollaxis(obs["walker/egocentric_camera"], -1)
+        frame = np.rollaxis(obs["walker/egocentric_camera"], -1)
 
         return MultiObservation(
             FloatTensor(features),
-            FloatTensor(camera),
+            FloatTensor(frame),
         )
 
     def render(self):

@@ -58,12 +58,12 @@ class VisualActor(nn.Module):
         act_dim: int,
         vis_dim: t.Tuple[int, int, int],
         hidden_sizes: t.List[int] = [256, 256],
-        log_min_std: float = -20,
-        log_max_std: float = 2,
         act_limit: float = 10,
         filters: t.List[int] = [32, 64, 64],
         kernel_sizes: t.List[int] = [8, 4, 3],
         strides: t.List[int] = [4, 2, 1],
+        log_min_std: float = -20,
+        log_max_std: float = 2,
     ):
         super(VisualActor, self).__init__()
         self.layers = mlp([obs_dim] + hidden_sizes)
@@ -87,10 +87,13 @@ class VisualActor(nn.Module):
         deterministic: bool = False,
         with_logprob: bool = True
     ) -> FloatTensor:
-        image = x.camera
-        image = image.view((-1,) + self.vis_dim)
+        image = x.frame
+        if image.ndim == 3:
+            image = image.view((-1, *self.vis_dim))
         x = x.features
-        x = x.view((-1, self.obs_dim))
+
+        if x.ndim == 1:
+            x = x.view(-1, self.obs_dim)
 
         for layer in self.layers:
             x = layer(x)
@@ -139,13 +142,17 @@ class VisualCritic(nn.Module):
         self.final = nn.Linear(2, 1)
         self.visual_network = simple_cnn(vis_dim, filters, kernel_sizes, strides)
 
-    def forward(self, x: MultiObservation) -> FloatTensor:
-        image = x.camera
-        image = image.view((-1,) + self.vis_dim)
+    def forward(self, state: MultiObservation, action: FloatTensor) -> FloatTensor:
+        image = state.frame
+        if image.ndim == 3:
+            image = image.view((-1, *self.vis_dim))
         conv_output = self.visual_network(image)
 
-        x = x.features
-        x = x.view((-1, self.obs_dim + self.act_dim))
+        x = state.features
+        x = torch.cat([x, action], dim=-1)
+        if x.ndim == 1:
+            x = x.view(-1, self.obs_dim + self.act_dim)
+
         for layer in self.layers:
             x = layer(x)
             x = F.relu(x)
@@ -172,5 +179,5 @@ class VisualDoubleCritic(nn.Module):
         self.q1 = VisualCritic(obs_dim, act_dim, vis_dim, hidden_sizes, filters, kernel_sizes, strides)
         self.q2 = VisualCritic(obs_dim, act_dim, vis_dim, hidden_sizes, filters, kernel_sizes, strides)
 
-    def forward(self, x: MultiObservation) -> t.Tuple[FloatTensor, FloatTensor]:
-        return self.q1(x), self.q2(x)
+    def forward(self, state: MultiObservation, action: FloatTensor) -> t.Tuple[FloatTensor, FloatTensor]:
+        return self.q1(state, action), self.q2(state, action)

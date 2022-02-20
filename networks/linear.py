@@ -58,7 +58,8 @@ class Critic(nn.Module):
         super(Critic, self).__init__()
         self.layers = mlp([obs_dim + act_dim] + hidden_sizes + [1])
 
-    def forward(self, x: FloatTensor) -> FloatTensor:
+    def forward(self, state: FloatTensor, action: FloatTensor) -> FloatTensor:
+        x = torch.cat([state, action], dim=-1)
         for layer in self.layers[:-1]:
             x = layer(x)
             x = F.relu(x)
@@ -74,5 +75,5 @@ class DoubleCritic(nn.Module):
         self.q1 = Critic(obs_dim, act_dim, hidden_sizes)
         self.q2 = Critic(obs_dim, act_dim, hidden_sizes)
 
-    def forward(self, x: FloatTensor) -> t.Tuple[FloatTensor, FloatTensor]:
-        return self.q1(x), self.q2(x)
+    def forward(self, state: FloatTensor, action: FloatTensor) -> t.Tuple[FloatTensor, FloatTensor]:
+        return self.q1(state, action), self.q2(state, action)

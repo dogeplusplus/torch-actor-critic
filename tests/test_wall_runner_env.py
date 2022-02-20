@@ -14,7 +14,7 @@ def test_reset(environment):
     state = environment.reset()
 
     assert len(state.features) == 168
-    assert state.camera.size() == (3, 64, 64)
+    assert state.frame.size() == (3, 64, 64)
 
 
 def test_step(environment):
@@ -23,7 +23,7 @@ def test_step(environment):
     state, reward, done, _ = environment.step(action)
 
     assert len(state.features) == 168
-    assert state.camera.size() == (3, 64, 64)
+    assert state.frame.size() == (3, 64, 64)
 
     assert isinstance(reward, float)
     assert isinstance(done, bool)

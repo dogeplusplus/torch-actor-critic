@@ -35,8 +35,7 @@ def eval_pi_loss(
     alpha: float
 ) -> torch.FloatTensor:
     pi, logp_pi = actor(next_state)
-    sa2 = torch.cat([state, pi], dim=1)
-    q1, q2 = critic(sa2)
+    q1, q2 = critic(state, pi)
 
     q_pi = torch.min(q1, q2)
     loss_pi = (alpha * logp_pi - q_pi).mean()
@@ -60,17 +59,14 @@ def eval_q_loss(
 
     with torch.no_grad():
         a2, logp_ac = actor(next_states)
-        sa2 = torch.cat([next_states, a2], dim=-1)
-        q1_target, q2_target = target_critic(sa2)
+        q1_target, q2_target = target_critic(next_states, a2)
         q_target = torch.min(q1_target, q2_target)
 
         backup = reward_scale * rewards + gamma * (1 - done) * (
             q_target - alpha * logp_ac
         )
 
-    sa = torch.cat([states, actions], dim=-1)
-    q1, q2 = critic(sa)
-
+    q1, q2 = critic(states, actions)
     loss_q1 = ((q1 - backup) ** 2).mean()
     loss_q2 = ((q2 - backup) ** 2).mean()
     loss_q = loss_q1 + loss_q2
@@ -86,11 +82,33 @@ def update_targets(source: nn.Module, target: nn.Module, polyak: float):
 
 
 class SAC(object):
-    def __init__(self, alpha: float, gamma: float, polyak: float, reward_scale: float):
+    def __init__(
+        self,
+        alpha: float,
+        gamma: float,
+        polyak: float,
+        reward_scale: float,
+        epochs: int,
+        batch_size: int,
+        start_steps: int,
+        steps_per_epoch: int,
+        max_ep_len: int,
+        update_after: int,
+        update_every: int,
+        save_every: int,
+    ):
         self.alpha = alpha
         self.gamma = gamma
         self.polyak = polyak
         self.reward_scale = reward_scale
+        self.epochs = epochs
+        self.batch_size = batch_size
+        self.start_steps = start_steps
+        self.steps_per_epoch = steps_per_epoch
+        self.max_ep_len = max_ep_len
+        self.update_after = update_after
+        self.update_every = update_every
+        self.save_every = save_every
 
         setup_pytorch_for_mpi()
 
@@ -164,20 +182,12 @@ class SAC(object):
     def train(
         self,
         start_epoch: int,
-        epochs: int,
-        batch_size: int,
-        start_steps: int,
-        steps_per_epoch: int,
-        max_ep_len: int,
         env: gym.Env,
         actor: nn.Module,
         critic: nn.Module,
         buffer: ReplayBuffer,
         pi_opt: optim.Optimizer,
         q_opt: optim.Optimizer,
-        update_after: int,
-        update_every: int,
-        save_every: int,
         render: bool = True,
         logging: bool = True,
     ):
@@ -188,23 +198,6 @@ class SAC(object):
         sync_params(actor)
         sync_params(critic)
         sync_params(target_critic)
-
-        # Log parameters in mlflow run
-        if proc_id() == 0 and logging:
-            parameters = dict(
-                alpha=self.alpha,
-                gamma=self.gamma,
-                polyak=self.polyak,
-                start_steps=start_steps,
-                steps_per_epoch=steps_per_epoch,
-                max_ep_len=max_ep_len,
-                update_after=update_after,
-                update_every=update_every,
-                save_every=save_every,
-                batch_size=batch_size,
-                reward_scale=self.reward_scale,
-            )
-            mlflow.log_params(parameters)
 
         comm = MPI.COMM_WORLD
         seed = 10000 * proc_id()
@@ -217,7 +210,7 @@ class SAC(object):
         ep_ret = 0
         ep_len = 0
 
-        pbar = tqdm.trange(start_epoch, start_epoch + epochs, ncols=0, initial=start_epoch)
+        pbar = tqdm.trange(start_epoch, start_epoch + self.epochs, ncols=0, initial=start_epoch)
         metrics = {
             "episode_length": 0,
             "reward": 0,
@@ -230,18 +223,22 @@ class SAC(object):
             losses_pi = []
             losses_q = []
 
-            for t in range(steps_per_epoch):
-                if step < start_steps:
+            for t in range(self.steps_per_epoch):
+                if step < self.start_steps:
                     action = env.action_space.sample()
                 else:
                     with torch.no_grad():
-                        action, _ = actor(FloatTensor(state))
+                        # Handle case with dm_control vs generic gym environment
+                        try:
+                            action, _ = actor(state)
+                        except TypeError:
+                            action, _ = actor(FloatTensor(state))
                         action = action.cpu().detach().numpy()
 
                 next_state, reward, done, _ = env.step(action)
 
                 # Bypass max episode length limitation of gym
-                done = False if ep_len == max_ep_len else done
+                done = False if ep_len == self.max_ep_len else done
 
                 if render and proc_id() == 0:
                     env.render()
@@ -252,7 +249,7 @@ class SAC(object):
                 buffer.store(state, action, reward, next_state, done)
                 state = next_state
 
-                epoch_ended = t % steps_per_epoch == steps_per_epoch - 1
+                epoch_ended = t % self.steps_per_epoch == self.steps_per_epoch - 1
 
                 if done or epoch_ended:
                     episode_rewards.append(ep_ret)
@@ -273,9 +270,9 @@ class SAC(object):
                     comm.send(episode_rewards, dest=0, tag=420)
                     comm.send(episode_lengths, dest=0, tag=1337)
 
-                if step > update_after and step % update_every == 0:
-                    for _ in range(update_every):
-                        samples = buffer.sample(batch_size)
+                if step > self.update_after and step % self.update_every == 0:
+                    for _ in range(self.update_every):
+                        samples = buffer.sample(self.batch_size)
                         loss_q = self.update_critic(q_opt, actor, critic, target_critic, samples)
                         loss_pi = self.update_policy(pi_opt, actor, critic, samples)
                         update_targets(critic, target_critic, self.polyak)
@@ -290,10 +287,11 @@ class SAC(object):
                 "reward": np.mean(episode_rewards),
                 "loss_q": np.mean(losses_q),
                 "loss_pi": np.mean(losses_pi),
+                "step": step,
             }
             pbar.set_postfix(metrics)
             if proc_id() == 0 and logging:
-                if e % save_every == 0:
+                if e % self.save_every == 0:
                     self.save_model(actor, critic, pi_opt, q_opt, e)
 
                 # End of epoch
