@@ -7,6 +7,7 @@ import torch.nn as nn
 from pathlib import Path
 from itertools import count
 from torch import FloatTensor
+from mlflow.tracking import MlflowClient
 from argparse import ArgumentParser, Namespace
 
 
@@ -50,8 +51,15 @@ def parse_arguments() -> Namespace:
 
 def main():
     args = parse_arguments()
-    env = gym.make("Humanoid-v2")
     artifact_path = Path("mlruns", "0", args.run, "artifacts")
+
+    client = MlflowClient()
+    run = client.get_run(args.run)
+    sac_params = run.data.params
+
+    # Default env to humanoid to account for legacy experiments where not recorded
+    environment = sac_params.get("environment", "Humanoid-v2")
+    env = gym.make(environment)
 
     actor_path = artifact_path / "actor"
     actor = mlflow.pytorch.load_model(actor_path)
