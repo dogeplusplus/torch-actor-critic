@@ -24,12 +24,22 @@ def run_agent(
     render: bool = True
 ):
     for e in range(episodes):
+        metrics = {
+            "ep_ret": 0,
+            "ep_len": 0
+        }
         done = False
         state = env.reset()
 
-        for _ in tqdm.tqdm(count(), desc=f"Epoch {e}"):
+        pbar = tqdm.tqdm(count(), desc=f"Epoch {e}")
+
+        for _ in pbar:
             action, _ = actor(FloatTensor(state), deterministic=deterministic)
-            state, _, done, _ = env.step(action.detach().numpy())
+            state, reward, done, _ = env.step(action.detach().numpy())
+            metrics["ep_len"] += 1
+            metrics["ep_ret"] += reward
+
+            pbar.set_postfix(metrics)
 
             if render:
                 env.render()
