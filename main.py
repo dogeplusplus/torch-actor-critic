@@ -58,7 +58,7 @@ def init_session(environment: str):
     obs_dim = env.observation_space.shape[0]
     act_limit = env.action_space.high[0]
 
-    hidden_sizes = [256, 256]
+    hidden_sizes = [256, 256, 256, 256]
 
     if environment == "DeepMindWallRunner-v0":
         # Extra parameters needed for convolutional policy/critic
